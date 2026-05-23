@@ -1,0 +1,32 @@
+# Python cache and bytecode
+__pycache__/
+
+# Packaging artifacts
+*.egg-info/
+dist/
+build/
+*.egg
+*.whl
+
+# Test artifacts
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# Virtual environments
+.venv/
+venv/
+
+# Type checker / linter caches
+.mypy_cache/
+.ruff_cache/
+
+# Local python version file
+.python-version
+
+# .env files
+.env

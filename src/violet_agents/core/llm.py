@@ -21,10 +21,12 @@
 - modelscope: qwen3.5-flash
 """
 import os
-from typing import Literal, Optional, Iterator, Dict, Any, List
+from typing import Literal, Optional, Iterator, Dict, Any, List, Union
+from collections import deque
 from openai import OpenAI
 from .exceptions import VioletAgentException
 from openai.types.chat import ChatCompletion
+from .message import Message
 
 
 SUPPORTED_PROVIDERS = Literal[
@@ -99,7 +101,7 @@ class VioletAgentsLLM:
         if actual_base_url:
             base_url_lower = actual_base_url.lower()
             if 'api.deepseek.com' in base_url_lower:
-                return 'deepseaek'
+                return 'deepseek'
             elif 'dashscope.aliyuncs.com' in base_url_lower:
                 return 'modelscope'
         # 2. 默认返回通用配置
@@ -129,12 +131,15 @@ class VioletAgentsLLM:
     def _get_default_model(self) -> Optional[str]:
         """
         根据provider返回默认模型名称
+
+        该方法会查询DEFAULT_MODELS字典，根据当前实例的provider值返回相应的默认模型名称。
+        如果provider没有在DEFAULT_MODELS中定义，则返回None。
         """
         return DEFAULT_MODELS.get(self.provider)
         
             
     def chat(self, 
-             messages: list[dict[str, Any]], 
+             messages: Union[list[dict[str, Any]], deque[Message]], 
              tools: Optional[List[Dict[str, Any]]] = None, 
              tool_choice: Optional[TOOL_CHOICE] = 'none',
              **kwargs) -> ChatCompletion:
@@ -142,13 +147,17 @@ class VioletAgentsLLM:
         调用LLM服务进行对话，返回完整响应
 
         Args:
-            messages: 对话消息列表，每个消息包含role和content字段
+            messages: 类型支持list[dict[str, Any]]或deque[Message]，对话消息列表，每个消息包含role和content字段
             tools: 工具列表，每个工具包含name和description字段
             tool_choice: 工具选择策略
 
         Returns:
             LLM服务返回的响应
         """
+
+        if isinstance(messages, deque):
+            messages = list(messages)
+
         return self.client.chat.completions.create(
             model=self.model,
             messages=messages,

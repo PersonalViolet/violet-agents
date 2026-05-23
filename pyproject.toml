@@ -1,0 +1,14 @@
+[project]
+name = "violet-agent"
+version = "0.1.0"
+description = "简单的agent框架"
+requires-python = ">=3.1.0"
+dependencies = [
+    "openai>=1.0.0",
+    "python-dotenv>=0.19.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0"
+]
