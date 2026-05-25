@@ -28,9 +28,9 @@ class SimpleAgent(Agent):
         self.add_message(response_message)
         return response_message
 
-if __name__ == "__main__":
-    load_dotenv(dotenv_path="D:/My-Project/violet_agents/.env")
-    llm = VioletAgentsLLM(provider='deepseek')
-    agent = SimpleAgent(name="SimpleAgent", llm=llm, system_prompt="你是一个简单的助手，直接回答用户的问题，不进行复杂的思考和计划。")
-    message = agent.run("简单介绍下agent")
-    print(message.content)
+# if __name__ == "__main__":
+#     load_dotenv(dotenv_path="D:/My-Project/violet_agents/.env")
+#     llm = VioletAgentsLLM(provider='deepseek')
+#     agent = SimpleAgent(name="SimpleAgent", llm=llm, system_prompt="你是一个简单的助手，直接回答用户的问题，不进行复杂的思考和计划。")
+#     message = agent.run("简单介绍下agent")
+#     print(message.content)
