@@ -5,13 +5,14 @@ from .base import Tool
 from ..core.message import Message
 import json
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageFunctionToolCall
-
+from .approval_tool import ApprovalTool
 class ToolRegistry:
     """
     工具注册表，用于管理和调用工具
     """
-    def __init__(self):
+    def __init__(self, approval_tool: Optional[ApprovalTool] = None):
         self._tools: Dict[str, Tool] = {}
+        self.approval_tool = approval_tool
 
     
     def register_tool(self, tool: Tool):
@@ -62,6 +63,12 @@ class ToolRegistry:
         tool = self._tools[tool_name]
         if not tool.validate_parameters(parameters):
             raise ValueError(f"工具 {tool_name} 参数验证失败，缺少必要参数")
+        
+        if self.approval_tool:
+            approved = self.approval_tool.approve(tool, parameters, tool_call_id)
+            if not approved:
+                return Message(role="tool", content=f"❌ 工具调用未通过用户的审批，已被用户拒绝: {tool_name}", tool_call_id=tool_call_id)
+
         return tool.run(parameters, tool_call_id)
 
     def get_openai_tools(self, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:

@@ -38,6 +38,8 @@ FORBIDDEN_DANGEROUS_COMMANDS = {
     }
 }
 
+TOOL_NAME = "terminal"
+TOOL_DESCRIPTION = "执行命令行指令，获取输出结果"
 class TerminalTool(Tool):
     """TerminalTool - 命令行工具
     绕过人工审批，直接执行命令行指令，获取输出结果
@@ -50,8 +52,8 @@ class TerminalTool(Tool):
             max_output_size: int = 10 * 1024 * 1024,  # 10 MB
             allow_cd: bool = True):
         super().__init__(
-            name="terminal",
-            description="执行命令行指令，获取输出结果"
+            name=TOOL_NAME,
+            description=TOOL_DESCRIPTION
         )
 
         self.workspace = Path(workspace).resolve()

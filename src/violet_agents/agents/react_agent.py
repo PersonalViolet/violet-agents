@@ -7,6 +7,7 @@ from ..tools.registry import ToolRegistry
 from dotenv import load_dotenv
 from ..tools.builtin.weather_tool import WeatherTool
 from ..tools.builtin.terminal_tool import TerminalTool
+from ..tools import DefaultApprovalTool
 
 
 REACT_PROMPT = """你是一个有能力使用工具的 AI 助手。
@@ -68,15 +69,17 @@ class ReactAgent(Agent):
         self._history = messages
         return response_message
     
-# if __name__ == "__main__":
-#     load_dotenv(dotenv_path="D:/My-Project/violet_agents/.env")
-#     llm = VioletAgentsLLM(provider='deepseek')
-#     tool_registry = ToolRegistry()
-#     weather_tool = WeatherTool()
-#     terminal_tool = TerminalTool()
-#     tool_registry.register_tool(weather_tool)
-#     tool_registry.register_tool(terminal_tool)
-#     agent = ReactAgent(name="ReactAgent", llm=llm, system_prompt=REACT_PROMPT, tool_registry=tool_registry)
-#     message = agent.run("看一下今天北京的天气，并看看我的端口占用情况，还有我目前连接的网络里还有哪些设备？")
-#     print(message.content)
+if __name__ == "__main__":
+    load_dotenv(dotenv_path="D:/My-Project/violet_agents/.env")
+    llm = VioletAgentsLLM(provider='deepseek')
+    tool_registry = ToolRegistry(DefaultApprovalTool(require_approval_tools=[TerminalTool],
+                                                     max_attempts=5,
+                                                     auto_approve_if_no_rules=True))
+    weather_tool = WeatherTool()
+    terminal_tool = TerminalTool()
+    tool_registry.register_tool(weather_tool)
+    tool_registry.register_tool(terminal_tool)
+    agent = ReactAgent(name="ReactAgent", llm=llm, system_prompt=REACT_PROMPT, tool_registry=tool_registry)
+    message = agent.run("看一下今天北京的天气，并看看我的端口占用情况，还有我目前连接的网络里还有哪些设备？")
+    print(message.content)
     

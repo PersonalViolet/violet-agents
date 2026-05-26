@@ -1,14 +1,29 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "violet-agent"
+name = "violet-agents"
 version = "0.1.0"
 description = "简单的agent框架"
 requires-python = ">=3.1.0"
 dependencies = [
-    "openai>=1.0.0",
+    "openai>=2.37.0",
     "python-dotenv>=0.19.0",
+]
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    { name = "ByteKnight", email = "esqaNN@163.com" }
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0"
 ]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
