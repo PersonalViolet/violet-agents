@@ -65,6 +65,13 @@ class VioletAgentsLLM:
             temperature: 模型温度，默认为0.7
             max_tokens: 最大token数，默认为None
             timeout: 请求超时时间，默认为None
+
+        example:
+        ```python
+        llmA = VioletAgentsLLM(provider="deepseek")
+        #使用该构造函数时，你需要确保环境变量LLM_BASE_URL存在，若你使用的服务商不支持本项目的自动检测功能，确保环境变量LLM_API_KEY和LLM_MODEL_NAME存在；若你使用的服务商在本项目中支持自动检测功能，确保环境变量${PROVIDER}_API_KEY或LLM_API_KEY存在
+        llmB = VioletAgentsLLM() 
+        ``` 
         """
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -157,6 +164,8 @@ class VioletAgentsLLM:
 
         if isinstance(messages, deque):
             messages = list(messages)
+        if messages and isinstance(messages[0], Message):
+            messages = [message.to_openai_dict() for message in messages]
 
         return self.client.chat.completions.create(
             model=self.model,

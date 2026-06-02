@@ -10,6 +10,10 @@ requires-python = ">=3.1.0"
 dependencies = [
     "openai>=2.37.0",
     "python-dotenv>=0.19.0",
+    "fastmcp>=3.3.1",
+    "numpy>=2.2.6",
+    "scikit-learn>=1.7.2",
+    "jieba>=0.42.1",
 ]
 readme = "README.md"
 license = {text = "MIT"}

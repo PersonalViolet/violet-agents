@@ -9,27 +9,60 @@ from .approval_tool import ApprovalTool
 class ToolRegistry:
     """
     工具注册表，用于管理和调用工具
+
+    Attributes:
+        _tools (Dict[str, Tool]): 已注册的工具字典，键为工具名称，值为Tool对象
+        _defer_tools (Dict[str, Tool]): 延迟工具字典，专门用于存储那些需要等到Agent发现后才调用的工具
+        approval_tool (Optional[ApprovalTool]): 可选的审批工具实例，如果提供了审批工具，在执行任何工具前都会先进行用户审批
+
     """
     def __init__(self, approval_tool: Optional[ApprovalTool] = None):
         self._tools: Dict[str, Tool] = {}
+        self._defer_tools: Dict[str, Tool] = {} # 延迟工具字典，不会对外暴露，专门用于存储那些需要等到Agent发现后才调用的工具
         self.approval_tool = approval_tool
 
     
-    def register_tool(self, tool: Tool):
+    def register_tool(self, 
+                      tool: Tool,
+                      is_defer: bool = False):
         """
         注册工具
 
         Args:
             tool (Tool): 要注册的工具实例
         """
-        if tool.name in self._tools:
+        # 如果工具名已存在于目标字典中，打印覆盖提示
+        if (is_defer and tool.name in self._defer_tools) or (not is_defer and tool.name in self._tools):
             print(f"工具 {tool.name} 已经注册，覆盖原有工具")
-        self._tools[tool.name] = tool
-        print(f"工具 {tool.name} 注册成功")
+        
+        # 如果工具名存在于另一个字典中，则删除它（实现覆盖行为）
+        if tool.name in self._tools and is_defer:
+            # 如果要注册为 defer 工具，但该名称已在普通工具中存在，则删除普通工具
+            del self._tools[tool.name]
+            print(f"工具 {tool.name} 从普通工具移动到延迟工具")
+        elif tool.name in self._defer_tools and not is_defer:
+            # 如果要注册为普通工具，但该名称已在 defer 工具中存在，则删除 defer 工具
+            del self._defer_tools[tool.name]
+            print(f"工具 {tool.name} 从延迟工具移动到普通工具")
+        
+        if is_defer:
+            self._defer_tools[tool.name] = tool
+            print(f"工具 {tool.name} 注册为延迟工具")
+        else:
+            self._tools[tool.name] = tool
+            print(f"工具 {tool.name} 注册为普通工具")
+
+    def get_tool(self, name: str) -> Optional[Tool]:
+        """获取在_tools的Tool对象"""
+        return self._tools.get(name)
+
+    def get_defer_tools(self) -> Dict[str, Tool]:
+        """获取所有延迟工具"""
+        return self._defer_tools
 
     def execute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
         """
-        执行工具
+        执行_tools, _defer_tools中注册的工具
 
         Args:
             tool_call (Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]): 工具调用信息，llm返回的工具调用格式，包含工具名称、参数等信息
@@ -58,9 +91,15 @@ class ToolRegistry:
         except json.JSONDecodeError as e:
             raise ValueError(f"工具参数解析失败，确保参数是有效的JSON字符串: {e}")
 
-        if tool_name not in self._tools:
+        if tool_name not in self._tools and tool_name not in self._defer_tools:
             raise ValueError(f"工具 {tool_name} 未注册")
-        tool = self._tools[tool_name]
+        if tool_name in self._tools:
+            tool = self._tools[tool_name]
+        elif tool_name in self._defer_tools:
+            tool = self._defer_tools[tool_name]
+        else:
+            raise ValueError(f"工具 {tool_name} 未找到")
+        
         if not tool.validate_parameters(parameters):
             raise ValueError(f"工具 {tool_name} 参数验证失败，缺少必要参数")
         

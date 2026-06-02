@@ -6,6 +6,8 @@ from .llm import VioletAgentsLLM
 from .config import Config
 from .message import Message
 from collections import deque
+import os
+
 class Agent(ABC):
     """Agent基类"""
     
@@ -49,3 +51,30 @@ class Agent(ABC):
     def clear_history(self):
         """清空消息历史记录"""
         self._history.clear()
+
+
+class SubAgent(Agent):
+    """SubAgent基类"""
+    
+    def __init__(self, 
+                 name: str,
+                 llm: Optional[VioletAgentsLLM] = None,
+                 system_prompt: Optional[str] = None,
+                 config: Optional[Config] = None):
+        """
+        初始化
+        
+        Attrs:
+            name (str): 代理名称
+            llm (Optional[VioletAgentsLLM], optional): LLM模型. Defaults to None.
+            system_prompt (Optional[str], optional): 系统提示. Defaults to None.
+            config (Optional[Config], optional): 配置. Defaults to None.
+        """
+        api_key = os.getenv("SUB_AGENT_LLM_API_KEY")
+        base_url = os.getenv("SUB_AGENT_LLM_BASE_URL")
+        model = os.getenv("SUB_AGENT_LLM_MODEL")
+        llm = llm or VioletAgentsLLM(api_key=api_key, base_url=base_url, model=model)
+        super().__init__(name, llm, system_prompt, config)
+
+
+

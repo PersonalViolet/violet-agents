@@ -48,7 +48,7 @@ class SkillsTool(Tool):
         """
         super().__init__(
             name="skills",
-            description="获取当前可用的技能列表"
+            description="获取当前可用的技能列表，以及加载指定技能的内容。"
         )
         self.skill_paths: List[Path] = []
         if builtin_path:
@@ -66,9 +66,6 @@ class SkillsTool(Tool):
             self.skill_paths.append(extra_path)
         if project_path:
             self.skill_paths.append(project_path)
-
-
-
 
     def _discover_skills(self) -> Dict[str, Tuple]:
         """

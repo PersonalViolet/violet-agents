@@ -11,9 +11,10 @@ __all__ = [
     "ToolRegistry",
     
     # 内置工具
-    "WeatherTool"
+    "WeatherTool",
 
     # 工具调用审批
-    "ApprovalTool"
-    "DefaultApprovalTool"
+    "ApprovalTool",
+    "DefaultApprovalTool",
+    
     ]
