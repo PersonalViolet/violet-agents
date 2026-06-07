@@ -52,6 +52,18 @@ class ToolRegistry:
             self._tools[tool.name] = tool
             print(f"工具 {tool.name} 注册为普通工具")
 
+    def register_tools(self, *tools: Tool, is_defer: bool = False) -> "ToolRegistry":
+        """
+        批量注册工具，支持链式调用
+
+        Args:
+            *tools (Tool): 要注册的工具实例列表
+            is_defer (bool): 是否将这些工具注册为延迟工具，默认为 False
+        """
+        for tool in tools:
+            self.register_tool(tool, is_defer=is_defer)
+        return self
+
     def get_tool(self, name: str) -> Optional[Tool]:
         """获取在_tools的Tool对象"""
         return self._tools.get(name)
@@ -59,6 +71,12 @@ class ToolRegistry:
     def get_defer_tools(self) -> Dict[str, Tool]:
         """获取所有延迟工具"""
         return self._defer_tools
+
+    def get_all_tools(self) -> Dict[str, Tool]:
+        """获取所有工具（包括普通工具和延迟工具）"""
+        all_tools = self._tools.copy()
+        all_tools.update(self._defer_tools)
+        return all_tools
 
     def execute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
         """
@@ -123,3 +141,8 @@ class ToolRegistry:
         if tool_names is None:
             return [tool.to_openai_dict() for tool in self._tools.values()]
         return [self._tools[name].to_openai_dict() for name in tool_names if name in self._tools]
+
+    def reset_all_tools(self) -> None:
+        """重置所有已注册工具到初始状态。"""
+        for tool in list(self._tools.values()) + list(self._defer_tools.values()):
+            tool.reset()

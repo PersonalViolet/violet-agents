@@ -30,3 +30,7 @@ venv/
 
 # .env files
 .env
+
+# DIY files
+current_task.md
+temp_gitcommit.txt

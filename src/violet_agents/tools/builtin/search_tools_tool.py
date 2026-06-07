@@ -1,5 +1,5 @@
 
-from typing import Dict, Any, Callable, Literal, Optional
+from typing import Dict, Any, Callable, Literal, Optional, Deque
 from pydantic import BaseModel
 from ..base import Tool, ToolParameters, ToolProperty
 from ...core.message import Message, MessageRole
@@ -22,19 +22,20 @@ class SearchToolsSubAgent(SubAgent):
                  config: Optional[Config] = None):
         super().__init__(name, llm, system_prompt, config)
 
-    def run(self, input_text) -> Message:
+    def do_run(self, 
+               input_text,
+               session: "Session",
+               **kwargs) -> Message:
         sys_message = Message(content=self.system_prompt, role="system") if self.system_prompt else None
         user_message = Message(content=input_text, role="user")
-        history = self.get_history()
+        history = Deque()
         if sys_message:
             history.append(sys_message)
         history.append(user_message)
         messages = history
         response = self.llm.chat(messages=messages)
         response_text = response.choices[0].message.content
-        self.add_message(user_message)
         response_message = Message(content=response_text, role="assistant")
-        self.add_message(response_message)
         return response_message
 
 
@@ -78,6 +79,8 @@ class SearchToolsTool(Tool):
             return Message(role="tool", content=json.dumps(tools, ensure_ascii=False), tool_call_id=tool_call_id)
         elif action == "get":
             tools = self.get_deferTools_callback()
+            if name not in tools:   # 这里仅在懒加载工具中搜索，认为普通工具都是已知的，不需要通过这个工具来获取
+                return Message(role="tool", content=json.dumps({"error": f"工具 {name} 未找到"}, ensure_ascii=False), tool_call_id=tool_call_id)
             complete_schema = tools[name].to_openai_dict()
             return Message(role="tool", content=json.dumps(complete_schema, ensure_ascii=False), tool_call_id=tool_call_id, metadata={"tool_type": SearchToolsTool, "action": "get"})
 
@@ -252,25 +255,3 @@ class SearchToolsTool(Tool):
         )
     
 
-
-# 定义一个具体的工具类用于测试
-class ConcreteTool(Tool):
-    def __init__(self, name: str, description: str):
-        super().__init__(name=name, description=description)
-    
-    def run(self, parameters: Dict[str, Any], tool_call_id: str) -> Message:
-        # 简单实现run方法
-        return Message(
-            role=MessageRole.ASSISTANT,
-            content=f"Tool {self.name} executed with parameters: {parameters}"
-        )
-    
-    def get_parameters(self) -> ToolParameters:
-        # 简单实现get_parameters方法
-        return ToolParameters(
-            type="object",
-            properties={
-                "param1": ToolProperty(type="string", description="示例参数")
-            },
-            required=["param1"]
-        )

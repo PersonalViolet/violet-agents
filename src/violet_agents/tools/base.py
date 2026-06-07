@@ -68,4 +68,16 @@ class Tool(ABC):
             }
         }
 
+    def get_session_state(self) -> Dict[str, Any]:
+        """返回工具当前可变状态的 JSON 安全快照。有状态工具需重写此方法。"""
+        return {}
+
+    def restore_session_state(self, state: Dict[str, Any]) -> None:
+        """从之前保存的状态快照恢复工具状态。有状态工具需重写此方法。"""
+        pass
+
+    def reset(self) -> None:
+        """将工具重置为初始（__init__ 后）状态。有状态工具需重写此方法。"""
+        pass
+
     

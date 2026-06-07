@@ -1,8 +1,9 @@
-from typing import Optional, List, Any, Dict, Callable, Literal, overload
+from typing import Optional, List, Any, Dict, Callable, Literal, overload, TYPE_CHECKING
 from ..core.config import Config
 from ..core.agent import Agent
 from ..core.llm import VioletAgentsLLM
 from ..core.message import Message
+from ..core.session import Session
 from ..tools.registry import ToolRegistry
 from dotenv import load_dotenv
 from ..tools.builtin.weather_tool import WeatherTool
@@ -11,6 +12,7 @@ from ..tools.builtin.skills_tool import SkillsTool
 from ..tools.builtin.search_tools_tool import SearchToolsTool
 from ..tools import DefaultApprovalTool
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageFunctionToolCall
+from collections import deque
 import json
 
 REACT_PROMPT = """你是一个有能力使用工具的 AI 助手。
@@ -27,210 +29,220 @@ REACT_PROMPT = """你是一个有能力使用工具的 AI 助手。
 - 每次工具调用后，仔细分析返回结果再决定下一步"""
 
 
-HookEvent = Literal["UserPromptSubmit", "PreToolCall", "PostToolCall"]
+
+
 class ReactAgent(Agent):
-    """ReactAgent，基于ReAct框架设计的Agent，能够在对话过程中主动调用工具进行思考和行动
+    """ReactAgent，基于ReAct框架设计的Agent，支持会话隔离。
+
+    不变配置：llm、tool_registry、max_steps、system_prompt。
+    可变状态全部存储在 Session 中，每个 session 拥有独立的：
+    消息历史、临时工具、钩子、轮次计数、工具状态快照。
     """
-    def __init__(self, 
+
+
+    def __init__(self,
                  name: str,
                  llm: VioletAgentsLLM,
                  max_steps: int = 5,
                  tool_registry: Optional[ToolRegistry] = None,
                  system_prompt: Optional[str] = None,
                  config: Optional[Config] = None):
-        super().__init__(name, llm, system_prompt, config)
+        super().__init__(name, llm, system_prompt, config, tool_registry)
         self.max_steps = max_steps
-        self.tool_registry = tool_registry or ToolRegistry()
-        self.temp_tools: List[Dict[str, Any]] = []  # 临时工具列表，用于存储当前对话中发现的工具信息
-        self.temp_tools_names: set = set()  # 临时工具名称集合，辅助快速判断工具是否已存在
-        self.temp_tools_last_call_round: Dict[str, int] = {} # 记录temp_tools中每个工具上次被调用的轮次，用于实现工具过期机制，key为工具名称，value为上次被调用的轮次
-        self.current_round: int = 0 # 当前对话轮次计数器
-        self.hooks: Dict[HookEvent, List[Callable]] = {"UserPromptSubmit": [], "PreToolCall": [], "PostToolCall": []}
-        self.register_hooks("PostToolCall", self._handle_search_tools_hook)
-        self.register_hooks("PreToolCall", self._on_temp_tool_called_hook)
 
-    @overload
-    def register_hooks(self, event: Literal["UserPromptSubmit"], callback: Callable[[str], None]) -> None: 
-        """
-            注册UserPromptSubmit事件的钩子
-            
-            :param event: "UserPromptSubmit" 事件
-            :param callback: 回调函数，接收用户输入文本作为参数
-
-        """
-        ...
-
-    @overload
-    def register_hooks(self, event: Literal["PreToolCall"], callback: Callable[[ChatCompletionMessageFunctionToolCall], None]) -> None: 
-        """
-            注册PreToolCall事件的钩子
-            
-            :param event: "PreToolCall" 事件
-            :param callback: 回调函数，接收ChatCompletionMessageFunctionToolCall类型作为参数
-        """
-        ...
-    @overload
-    def register_hooks(self, event: Literal["PostToolCall"], callback: Callable[[Message], None]) -> None: 
-        """
-            注册工具调用后事件的钩子
-            
-            :param event: "PostToolCall" 事件
-            :param callback: 回调函数，接收工具调用结果相关参数
-        """
-        ...
+        self.register_session_hook("PostToolCall", self._handle_search_tools_hook)
+        self.register_session_hook("PreToolCall", self._on_temp_tool_called_hook)
 
 
-    def register_hooks(self, event: HookEvent, callback: Callable):
-        """
-            注册用户输入提交事件的钩子
-            
-            :param event: "UserPromptSubmit" 事件
-            :param callback: 回调函数，接收用户输入文本作为参数
-        """
-        if event in self.hooks:
-            self.hooks[event].append(callback)
 
-    def _trigger_hooks(self, event: HookEvent, *args):
-        """
-        触发钩子函数
-        Args:
-            event (HookEvent): 事件类型
-            *args: 根据事件类型不同而不同的参数列表
-        """
-        for callback in self.hooks[event]:
-            result = callback(*args)
-            if result is not None:  # 返回值 ≠ None → hook 说"停"
-                return result
-            return None
+    # --- 主运行循环 ---
+    # TODO 当前实现中需要在run里自己动态调用工具状态保存/恢复方法，未来可以考虑在切换 session 的时候自动调用，简化 run 方法的实现。
+    def do_run(self, 
+               input_text: str, 
+               session: "Session", 
+               **kwargs) -> Message:
+        sess = session
+        sess.agent_state.setdefault("current_round", 0)
+        self._trigger_session_hooks("UserPromptSubmit", input_text, sess=sess)
 
-    def run(self, input_text) -> Message:
         user_message = Message(content=input_text, role="user")
         sys_message = Message(content=self.system_prompt, role="system") if self.system_prompt else None
-        messages = self.get_history()
+
+        messages = list(sess.get_history())  # 转为 list，后续追加
         if sys_message:
             messages.append(sys_message)
         messages.append(user_message)
+
         current_step = 0
         while current_step < self.max_steps:
-            tools = self.tool_registry.get_openai_tools() + self.temp_tools
+            tools = self.tool_registry.get_openai_tools() + sess.agent_state.get("temp_tools", [])
             response = self.llm.chat(messages=messages, tools=tools, tool_choice="auto")
             message = response.choices[0].message
             tool_calls = message.tool_calls
+
             if not tool_calls:
-                # 没有工具调用，直接返回回答
                 response_message = Message.from_chat_completion_message(message)
                 messages.append(response_message)
-                self._history = messages
+                # 修复 bug：用 deque 保持类型一致并应用 maxlen
+                sess._history = deque(messages, maxlen=sess.max_history_length if sess.max_history_length > 0 else None)
+                sess._touch()
                 return response_message
-            # 处理工具调用
-            response_text = message.content if message.content else ""
-            # llm_message = Message(content=response_text, role="assistant", tool_calls=tool_calls)
+
             llm_message = Message.from_chat_completion_message(message)
             messages.append(llm_message)
             for tool_call in tool_calls:
-                self._trigger_hooks("PreToolCall", tool_call)
+                self._trigger_session_hooks("PreToolCall", tool_call, sess=sess)
                 tool_response_message = self.tool_registry.execute_tool(tool_call)
-                self._trigger_hooks("PostToolCall", tool_response_message)
+                self._trigger_session_hooks("PostToolCall", tool_response_message, sess=sess)
                 messages.append(tool_response_message)
             current_step += 1
-        # 超过最大步骤限制，返回最后一次回答
+
         response_text = "超出最大思考步骤限制，无法给出回答。"
         response_message = Message(content=response_text, role="assistant")
         messages.append(response_message)
-        self._history = messages
-        self.current_round += 1
+        sess._history = deque(messages, maxlen=sess.max_history_length if sess.max_history_length > 0 else None)
+        sess._touch()
+        # 更新agent_state中的current_round
+        sess.agent_state["current_round"] += 1
         return response_message
-    
-    def _add_temp_tool(self, tool_schema_dict: Dict[str, Any]) -> None:
-        """添加临时工具
-        将新的工具信息添加到temp_tools列表和temp_tools_names集合中
 
-        Args:
-            tool_schema_dict (Dict[str, Any]): 工具信息字典，包含工具的名称、功能描述、参数等信息
-        """
-        self.temp_tools.append(tool_schema_dict)
-        self.temp_tools_names.add(tool_schema_dict.get("function", {}).get("name"))
+    # --- 临时工具管理（操作 Session 中的字段） ---
 
-    def _cleanup_temp_tools(self, tools_to_remove: List[str]) -> None:
-        """删除过时的临时工具
-        从temp_tools, temp_tools_last_call_round中删除过时工具，并更新temp_tools_names集合
-        
-        Args:
-            tools_to_remove (List[str]): 需要删除的工具名称列表
-        """
-        self.temp_tools = [tool for tool in self.temp_tools 
-                            if tool.get("function", {}).get("name") not in tools_to_remove]
+    def _add_temp_tool(self, tool_schema_dict: Dict[str, Any], sess: Optional[Session] = None) -> None:
+        s = sess or self._active_session
+        if s is None:
+            return
+        s.agent_state.setdefault("temp_tools", []).append(tool_schema_dict)
+        s.agent_state.setdefault("temp_tools_names", set()).add(tool_schema_dict.get("function", {}).get("name"))
+
+    def _cleanup_temp_tools(self, tools_to_remove: List[str], sess: Optional[Session] = None) -> None:
+        s = sess or self._active_session
+        if s is None:
+            return
+        s.agent_state["temp_tools"] = [tool for tool in s.agent_state.get("temp_tools", [])
+                        if tool.get("function", {}).get("name") not in tools_to_remove]
         for tool_name in tools_to_remove:
-            self.temp_tools_names.discard(tool_name)
-            del self.temp_tools_last_call_round[tool_name]
+            s.agent_state["temp_tools_names"].discard(tool_name)
+            if tool_name in s.agent_state.get("temp_tools_last_call_round", {}):
+                del s.agent_state["temp_tools_last_call_round"][tool_name]
 
-    def _check_temp_tools_expiry(self) -> List[str]:
-        """检查临时工具过期
-        检查temp_tools_last_call_round中记录的工具调用轮次，如果当前轮次与上次调用轮次之差超过3轮，则认为该工具过期，返回过期工具名称列表
-
-        Returns:
-            List[str]: 过期工具名称列表
-        """
-        current_round = self.current_round
+    def _check_temp_tools_expiry(self, sess: Optional[Session] = None) -> List[str]:
+        s = sess or self._active_session
+        if s is None:
+            return []
         expired_tools = []
-        for tool_name, last_call_round in self.temp_tools_last_call_round.items():
-            if current_round - last_call_round >= 3:
+        for tool_name, last_call_round in s.agent_state.get("temp_tools_last_call_round", {}).items():
+            if s.agent_state["current_round"] - last_call_round >= 3:
                 expired_tools.append(tool_name)
         return expired_tools
 
-
+    # --- 内置钩子回调 ---
 
     def _handle_search_tools_hook(self, tool_response_message: Message) -> None:
-        """处理搜索工具返回内容的PostToolCall钩子函数
-        当工具调用返回后，如果是搜索工具的get功能的调用结果，则解析工具返回的内容，提取工具信息并将其添加到临时工具列表中，以便后续对话中可以使用这些新工具
-        
-        Args:
-            tool_response_message (Message): 工具调用返回的消息对象，包含工具调用结果的相关信息
-        """
-        if tool_response_message.tool_call_id and tool_response_message.metadata and tool_response_message.metadata.get("tool_type") == SearchToolsTool and tool_response_message.metadata.get("action") == "get":
+        sess = self._active_session
+        if tool_response_message.tool_call_id and tool_response_message.metadata \
+                and tool_response_message.metadata.get("tool_type") == SearchToolsTool \
+                and tool_response_message.metadata.get("action") == "get":
             tool_schema = tool_response_message.content
             try:
                 tool_schema_dict = json.loads(tool_schema)
-                self._add_temp_tool(tool_schema_dict)
+                self._add_temp_tool(tool_schema_dict, sess=sess)
                 tool_response_message.content = f"已加载工具: {tool_schema_dict.get('function', {}).get('name', '未知工具')}"
             except json.JSONDecodeError as e:
                 print(f"工具schema解析失败，确保工具返回的schema是有效的JSON字符串: {e}")
 
     def _on_temp_tool_called_hook(self, tool_call: ChatCompletionMessageFunctionToolCall) -> None:
-        """这是一个PreToolCall钩子函数，用于处理临时工具的过期检查和调用轮次更新
-        当工具调用发生时，如果调用的工具在temp_tools中，则更新该工具的最后调用轮次为当前轮次，并检查temp_tools中是否有工具超过三轮未被调用，如果有则将其从temp_tools中删除
-
-        Args:
-            tool_call (ChatCompletionMessageFunctionToolCall): 当前的工具调用信息，包含工具名称、参数等信息
-        """
+        sess = self._active_session
+        if sess is None:
+            return
         tool_name = tool_call.function.name
-        # 只有当调用的工具在temp_tools中时才更新调用轮次并检查过期工具
-        if tool_name in self.temp_tools_names:
-            self.temp_tools_last_call_round[tool_name] = self.current_round
-            # 检查过期工具
-            expired_tools = self._check_temp_tools_expiry()
-            
-            # 从temp_tools和temp_tools_last_call_round中删除这些工具
-            self._cleanup_temp_tools(expired_tools)
+        if tool_name in sess.agent_state.get("temp_tools_names", set()):
+            sess.agent_state.setdefault("temp_tools_last_call_round", {})[tool_name] = sess.agent_state["current_round"]
+            expired_tools = self._check_temp_tools_expiry(sess=sess)
+            self._cleanup_temp_tools(expired_tools, sess=sess)
 
+    if TYPE_CHECKING:
+        @overload
+        def register_session_hook(self, event: Literal["UserPromptSubmit"],
+                        callback: Callable[[str], None],
+                        session_id: Optional[str] = None) -> None: ...
+
+        @overload
+        def register_session_hook(self, event: Literal["PreToolCall"],
+                        callback: Callable[[ChatCompletionMessageFunctionToolCall], None],
+                        session_id: Optional[str] = None) -> None: ...
+
+        @overload
+        def register_session_hook(self, event: Literal["PostToolCall"],
+                        callback: Callable[[Message], None],
+                        session_id: Optional[str] = None) -> None: ...
+        
+        @overload
+        def _trigger_session_hooks(self, event: Literal["UserPromptSubmit"], arg: str, sess: Optional["Session"] = None) -> None: ...
+
+        @overload
+        def _trigger_session_hooks(self, event: Literal["PreToolCall"], arg: ChatCompletionMessageFunctionToolCall, sess: Optional["Session"] = None) -> None: ...
+
+        @overload
+        def _trigger_session_hooks(self, event: Literal["PostToolCall"], arg: Message, sess: Optional["Session"] = None) -> None: ...
+
+
+
+# if __name__ == "__main__":
+#     load_dotenv(dotenv_path="D:/My-Project/violet_agents/.env")
+#     llm = VioletAgentsLLM(provider='deepseek')
+#     tool_registry = ToolRegistry(DefaultApprovalTool(require_approval_tools=[TerminalTool],
+#                                                      max_attempts=5,
+#                                                      auto_approve_if_no_rules=True))
+#     weather_tool = WeatherTool()
+#     terminal_tool = TerminalTool()
+#     skills_tool = SkillsTool()
+#     search_tools_tool = SearchToolsTool(get_deferTools_callback=tool_registry.get_defer_tools, search_strategy="subAgent")
+#     tool_registry.register_tool(weather_tool)
+#     tool_registry.register_tool(terminal_tool, is_defer=True)
+#     tool_registry.register_tool(skills_tool)
+#     tool_registry.register_tool(search_tools_tool)
+#     system_msg = REACT_PROMPT + "\n\n" + skills_tool.get_system_prompt_section()
+#     agent = ReactAgent(name="ReactAgent", llm=llm, system_prompt=system_msg, tool_registry=tool_registry, max_steps=10)
+#     message = agent.run("你好啊，我想看看我目前连接的网络里还有哪些设备？使用search_tools工具")
+#     print(message.content)
 
 if __name__ == "__main__":
-    load_dotenv(dotenv_path="D:/My-Project/violet_agents/.env")
-    llm = VioletAgentsLLM(provider='deepseek')
+
     tool_registry = ToolRegistry(DefaultApprovalTool(require_approval_tools=[TerminalTool],
                                                      max_attempts=5,
                                                      auto_approve_if_no_rules=True))
-    weather_tool = WeatherTool()
-    terminal_tool = TerminalTool()
-    skills_tool = SkillsTool()
-    search_tools_tool = SearchToolsTool(get_deferTools_callback=tool_registry.get_defer_tools, search_strategy="subAgent")
-    tool_registry.register_tool(weather_tool)
-    tool_registry.register_tool(terminal_tool, is_defer=True)  # 将终端工具注册为延迟工具
-    tool_registry.register_tool(skills_tool)
-    tool_registry.register_tool(search_tools_tool)
-    system_msg = REACT_PROMPT + "\n\n" + skills_tool.get_system_prompt_section()
-    agent = ReactAgent(name="ReactAgent", llm=llm, system_prompt=system_msg, tool_registry=tool_registry, max_steps=10)
-    # message = agent.run("看一下今天北京的天气，并看看我的端口占用情况，还有我目前连接的网络里还有哪些设备？")
-    message = agent.run("你好啊，我想看看我目前连接的网络里还有哪些设备？使用search_tools工具")
-    print(message.content)
-    
+    tool_registry.register_tools(WeatherTool(), SkillsTool(), SearchToolsTool(get_deferTools_callback=tool_registry.get_defer_tools, search_strategy="subAgent"), is_defer=False)
+    tool_registry.register_tool(TerminalTool(), is_defer=True)
+    agent = ReactAgent(
+        name="MyAgent",
+        llm=VioletAgentsLLM(provider="deepseek"),
+        tool_registry=tool_registry,
+        max_steps=10,
+    )
+
+    agent.registry_agent_hook("SessionInit", lambda sess: print(f"Session '{sess.session_id}' 正在初始化"))
+    agent.registry_agent_hook("PreSessionSwitch", lambda sessions: print(f"正在切换 session，从 '{sessions[0].session_id if sessions[0] else None}' 切换到 '{sessions[1].session_id}'"))
+    # 方式一：指定 session_id 运行（自动创建 session）
+    response = agent.run("你好，北京天气怎么样？", session_id="user-123")
+    print(response.content)
+    agent.deactivate_session()  # 显式结束 session，触发工具状态保存
+
+    # 方式二：上下文管理器
+    with agent.session("user-123"):
+        agent.register_session_hook("PostToolCall", lambda msg: print(f"工具调用后返回了: {msg.content}"), session_id="user-123")
+        response = agent.run("你肯定有terminal工具，想方设法找到它。简单看看我的ip地址，还有我刚刚询问天气的城市叫啥？")
+        print(response.content)
+        response = agent.run("使用cd命令（不要用/d）进入我的src/violet_agent/agents包；看我的agents包里有什么文件？")
+        print(response.content)
+
+    # 方式三：手动管理
+    agent.create_session("user-456")
+    agent.switch_session("user-456")
+    response = agent.run("我刚刚说了什么？还有，我喜欢千小妹，简短回复我")
+    print(response.content)
+    response = agent.run("terminal工具现在的工作目录在哪里？看一下并告诉我，使用cd命令检查一下，你一定有terminal工具的，你用search_tools工具找一下，如果找不到就直接调用看看，不要放弃！")
+    print(response.content)
+    agent.switch_session("user-123")  # 切回之前的 session
+    response = agent.run("我之前说了什么？现在的terminal工具工作目录在哪里？使用cd命令检查")
+    print(response.content)

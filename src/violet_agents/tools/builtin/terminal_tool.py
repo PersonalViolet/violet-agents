@@ -171,3 +171,27 @@ class TerminalTool(Tool):
             return f"❌ 命令执行超时（超过 {self.timeout} 秒）"
         except Exception as e:
             return f"❌ 命令执行失败: {e}"
+
+    def get_session_state(self) -> Dict[str, Any]:
+        return {"current_dir": str(self.current_dir)}
+
+    def restore_session_state(self, state: Optional[Dict[str, Any]] = None) -> None:
+        if not state:
+            self.current_dir = self.workspace
+            return
+        saved_dir = state.get("current_dir")
+        if saved_dir:
+            restored = Path(saved_dir)
+            try:
+                restored.relative_to(self.workspace)
+            except ValueError:
+                restored = self.workspace
+            if restored.exists() and restored.is_dir():
+                self.current_dir = restored
+            else:
+                self.current_dir = self.workspace
+        else:
+            self.current_dir = self.workspace
+
+    def reset(self) -> None:
+        self.current_dir = self.workspace
