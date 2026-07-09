@@ -289,4 +289,4 @@ sess._history = deque(messages, maxlen=sess.max_history_length if sess.max_histo
 3. **利用序列化**：将 session 存储到 Redis/数据库，实现跨进程、跨重启的对话持久化。
 4. **工具开发者**：有状态工具务必实现 `get_session_state`/`restore_session_state`/`reset` 三个方法。
 5. **测试中使用 mock LLM**：参考 `tests/test_session.py` 中的 `_DummyLLM` 模式，避免测试依赖外部 API。
-6. **不要跨线程共享 Agent**：Session 管理不是线程安全的。多线程场景下每个线程创建独立的 Agent 实例。
+6. **多线程安全**：Agent 实例使用 `contextvars` 实现线程级 session 隔离，多线程可安全共享同一 Agent 实例。详见 [thread-safety.md](thread-safety.md)。

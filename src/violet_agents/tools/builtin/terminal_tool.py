@@ -61,11 +61,23 @@ class TerminalTool(Tool):
         self.max_output_size = max_output_size
         self.allow_cd = allow_cd
         self.os_type = platform.system().lower()
-        # 当前工作目录（相对于workspace）
-        self.current_dir = self.workspace
 
         # 确保工作目录存在
         self.workspace.mkdir(parents=True, exist_ok=True)
+
+    def _make_default_state(self) -> Dict[str, Any]:
+        """返回工具的默认状态：初始工作目录。"""
+        return {"current_dir": str(self.workspace)}
+
+    @property
+    def current_dir(self) -> Path:
+        """当前工作目录，通过 ContextVar 实现每上下文隔离。"""
+        return Path(self._get_state()["current_dir"])
+
+    @current_dir.setter
+    def current_dir(self, value: Path) -> None:
+        """设置当前工作目录，写入当前执行上下文的 ContextVar。"""
+        self._get_state()["current_dir"] = str(value)
 
     def run(self, parameters: Dict[str, Any], tool_call_id: str) -> Message:
         """执行命令行指令，获取输出结果"""
@@ -159,7 +171,7 @@ class TerminalTool(Tool):
             # 检查输出大小
             if len(output) > self.max_output_size:
                 output = output[:self.max_output_size]
-                output += f"\n\n⚠️ 输出被截断（超过 {self.max_output_size} 字节）"
+                output += f"\n\n ⚠️ 输出被截断（超过 {self.max_output_size} 字节）"
             
             # 添加返回码信息
             if result.returncode != 0:
@@ -172,26 +184,25 @@ class TerminalTool(Tool):
         except Exception as e:
             return f"❌ 命令执行失败: {e}"
 
-    def get_session_state(self) -> Dict[str, Any]:
-        return {"current_dir": str(self.current_dir)}
-
     def restore_session_state(self, state: Optional[Dict[str, Any]] = None) -> None:
+        """验证并修正传入状态的合法性（沙箱边界、路径存在性），
+        然后委托基类执行 ContextVar 的原子替换。"""
         if not state:
-            self.current_dir = self.workspace
+            super().restore_session_state(None)
             return
-        saved_dir = state.get("current_dir")
+
+        validated = dict(state)  # 不修改入参
+        saved_dir = validated.get("current_dir")
         if saved_dir:
             restored = Path(saved_dir)
             try:
                 restored.relative_to(self.workspace)
             except ValueError:
                 restored = self.workspace
-            if restored.exists() and restored.is_dir():
-                self.current_dir = restored
-            else:
-                self.current_dir = self.workspace
+            if not restored.exists() or not restored.is_dir():
+                restored = self.workspace
+            validated["current_dir"] = str(restored)
         else:
-            self.current_dir = self.workspace
+            validated["current_dir"] = str(self.workspace)
 
-    def reset(self) -> None:
-        self.current_dir = self.workspace
+        super().restore_session_state(validated)

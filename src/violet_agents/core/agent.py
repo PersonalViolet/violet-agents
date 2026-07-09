@@ -10,12 +10,11 @@ from collections import deque
 from ..tools.registry import ToolRegistry
 import os
 import uuid
+import contextvars
+import threading
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .session import Session
-
-
-#TODO 目前会话隔离仅在单线程下安全。未来版本可能会引入更复杂的并发控制机制以支持多线程/多进程环境下的会话隔离和状态管理。
 class Agent(ABC):
 
     """Agent基类
@@ -34,6 +33,9 @@ class Agent(ABC):
     - SessionInit: 在每次创建新 Session 时触发，回调参数为新创建的 Session 对象。适合在这里为 Session 注入默认钩子。
     - SessionSwitch: 在agent实例真正切换 Session 时触发，回调参数为一个元组 (old_session, new_session)。适合在这里处理切换时的状态保存/恢复等逻辑。
 
+    线程安全说明：
+    使用 contextvars 实现每个执行上下文（线程/asyncio task）独立的 active session 和历史记录，
+    多线程并发调用 agent.run() 互不干扰。Session 池 (_sessions) 通过 RLock 保护并发读写。
     """
 
     def __init__(self,
@@ -61,21 +63,50 @@ class Agent(ABC):
             "TurnStart": [],
             "TurnEnd": [],
         }
-
-        # 旧版历史（向后兼容，无 active session 时使用）
-        self._history = deque[Message](
-            maxlen=self.config.max_history_length if self.config.max_history_length > 0 else None
-        )
+        # --- ContextVar：每执行上下文的隔离状态 ---
+        self._active_session_var: contextvars.ContextVar[Optional["Session"]] = \
+            contextvars.ContextVar(f"_active_session_{id(self)}", default=None)
+        self._history_var: contextvars.ContextVar[deque[Message]] = \
+            contextvars.ContextVar(
+                f"_history_{id(self)}",
+                default=deque[Message](
+                    maxlen=self.config.max_history_length if self.config.max_history_length > 0 else None
+                )
+            )
+        self._default_session_id_var: contextvars.ContextVar[Optional[str]] = \
+            contextvars.ContextVar(f"_default_session_id_{id(self)}", default=None)
 
         # --- Session 管理 ---
         self._sessions: Dict[str, "Session"] = {}   # session_id -> Session 对象
-        self._active_session: Optional["Session"] = None    # 实例中当前活跃的 session 对象
-        self._default_session_id: Optional[str] = None      # 自动创建的默认 session 的 ID（仅第一次调用 _resolve_session 且无指定 session_id 且 _active_session 为none 时创建）
+        self._sessions_lock = threading.RLock()      # Session 池并发保护
 
         self.register_session_hook("TurnStart", self._restore_all_tool_states_hook)
         self.register_session_hook("TurnEnd", self._save_all_tool_states_hook)
 
-    
+    # --- ContextVar 辅助方法 ---
+
+    def _get_active_session(self) -> Optional["Session"]:
+        """获取当前执行上下文的活跃 Session。"""
+        return self._active_session_var.get()
+
+    def _set_active_session(self, sess: Optional["Session"]) -> None:
+        """设置当前执行上下文的活跃 Session。"""
+        self._active_session_var.set(sess)
+
+    def _get_history(self) -> deque[Message]:
+        """获取当前执行上下文的默认消息历史（向后兼容）。"""
+        return self._history_var.get()
+
+    def _get_default_session_id(self) -> Optional[str]:
+        """获取当前执行上下文的默认 session ID。"""
+        return self._default_session_id_var.get()
+
+    def _set_default_session_id(self, sid: Optional[str]) -> None:
+        """设置当前执行上下文的默认 session ID。"""
+        self._default_session_id_var.set(sid)
+
+    # --- 主运行接口 ---
+
     def run(self, input_text: str, session_id: Optional[str] = None, **kwargs) -> Message:
         """运行Agent，处理输入并返回任务完成后的结果。
 
@@ -112,8 +143,7 @@ class Agent(ABC):
     
 
     # --- 历史方法（委托模式） ---
-
-    def add_message(self, 
+    def add_message(self,
                     message: Message,
                     session_id: Optional[str] = None):
         """添加消息到历史。指定 session_id 则添加到那个 session，否则添加到 active session 或默认历史（向后兼容）。"""
@@ -123,14 +153,15 @@ class Agent(ABC):
                 raise KeyError(f"Session '{session_id}' not found")
             sess.add_message(message)
             return
-        if self._active_session:
-            self._active_session.add_message(message)
+        active = self._get_active_session()
+        if active:
+            active.add_message(message)
         else:
-            self._history.append(message)
+            self._get_history().append(message)
 
     def get_history(self, session_id: Optional[str] = None) -> deque[Message]:
         """获取消息历史。指定 session_id 则获取那个 session 的历史，否则获取 active session 的消息历史或默认历史（向后兼容）。
-        
+
         Args:
             session_id: 可选，指定要获取历史的 session ID。不存在则获取 active session 的消息历史或默认历史。
         """
@@ -139,13 +170,14 @@ class Agent(ABC):
             if sess is None:
                 raise KeyError(f"Session '{session_id}' not found")
             return sess.get_history()
-        if self._active_session:
-            return self._active_session.get_history()
-        return self._history.copy()
+        active = self._get_active_session()
+        if active:
+            return active.get_history()
+        return self._get_history().copy()
 
     def clear_history(self, session_id: Optional[str] = None):
         """清理消息历史。指定 session_id 则清理那个 session 的历史，否则清理 active session 或默认历史（向后兼容）。
-        
+
         Args:
             session_id: 可选，指定要清理历史的 session ID。不存在则清理 active session 或默认历史。
         """
@@ -155,13 +187,13 @@ class Agent(ABC):
                 raise KeyError(f"Session '{session_id}' not found")
             sess.clear_history()
             return
-        if self._active_session:
-            self._active_session.clear_history()
+        active = self._get_active_session()
+        if active:
+            active.clear_history()
         else:
-            self._history.clear()
+            self._get_history().clear()
 
     # --- Session 生命周期 ---
-
     def create_session(self, session_id: Optional[str] = None, **kwargs) -> str:
         """创建新 session，返回 session_id。不自动激活。"""
         from .session import Session
@@ -172,40 +204,43 @@ class Agent(ABC):
             **kwargs
         )
         self._trigger_agent_hooks("SessionInit", sess)
-        self._sessions[sess.session_id] = sess
+        with self._sessions_lock:
+            self._sessions[sess.session_id] = sess
         if self.config.auto_cleanup_sessions:
             self._cleanup_expired_sessions()
         return sess.session_id
 
-
     def get_session(self, session_id: str) -> Optional["Session"]:
-        return self._sessions.get(session_id)
+        with self._sessions_lock:
+            return self._sessions.get(session_id)
 
     def destroy_session(self, session_id: str) -> bool:
         """永久删除一个 session。如果是 active session 则先保存工具状态并清除。"""
-        if session_id not in self._sessions:
-            return False
-        if self._active_session and self._active_session.session_id == session_id:
-            self._save_all_tool_states()
-            self._active_session = None
-        del self._sessions[session_id]
+        with self._sessions_lock:
+            if session_id not in self._sessions:
+                return False
+            active = self._get_active_session()
+            if active and active.session_id == session_id:
+                self._save_all_tool_states()
+                self._set_active_session(None)
+            del self._sessions[session_id]
         return True
 
     def list_sessions(self) -> List[str]:
-        return list(self._sessions.keys())
+        with self._sessions_lock:
+            return list(self._sessions.keys())
 
     def switch_session(self, session_id: str) -> None:
         """
         切换到指定 session，如果该 session 已经是当前 active session 则不执行任何操作，也不会触发Pre/PostSessionSwitch钩子。
         """
-        if session_id not in self._sessions:
-            raise KeyError(f"Session '{session_id}' not found")
-        # self._trigger_agent_hooks("SessionSwitch", (self._active_session, self._sessions[session_id]))
         sess = self.get_session(session_id)
+        if sess is None:
+            raise KeyError(f"Session '{session_id}' not found")
         if self._is_active_session(sess):
             return
 
-        previous_session = self._active_session
+        previous_session = self._get_active_session()
         if previous_session is not None:
             self._save_all_tool_states()
 
@@ -213,24 +248,19 @@ class Agent(ABC):
         self._activate_session(sess)
         self._restore_all_tool_states()
         self._trigger_agent_hooks("PostSessionSwitch", (previous_session, sess))
-            
 
-        # if self._active_session:
-        #     self._save_all_tool_states()
-        # self._active_session = self._sessions[session_id]
-        # self._restore_all_tool_states()
-    
     def _is_active_session(self, sess: Union["Session", str]) -> bool:
         """判断给定 session 是否为当前 active session。参数可以是 session_id 或 Session 对象。"""
+        active = self._get_active_session()
         if isinstance(sess, str):
-            return self._active_session is not None and self._active_session.session_id == sess
+            return active is not None and active.session_id == sess
         else:
-            return self._active_session is not None and self._active_session.session_id == sess.session_id
+            return active is not None and active.session_id == sess.session_id
 
     def _activate_session(self, sess: "Session") -> None:
         """
         激活 session"""
-        self._active_session = sess
+        self._set_active_session(sess)
 
     def session(self, session_id: str):
         """上下文管理器：在指定 session 内运行代码块。
@@ -244,31 +274,33 @@ class Agent(ABC):
 
     def save_session(self, session_id: str) -> Dict[str, Any]:
         """将 session 序列化为 JSON 安全的 dict。"""
-        sess = self._sessions.get(session_id)
+        with self._sessions_lock:
+            sess = self._sessions.get(session_id)
         if sess is None:
             raise KeyError(f"Session '{session_id}' not found")
-        if self._active_session and self._active_session.session_id == session_id:
+        active = self._get_active_session()
+        if active and active.session_id == session_id:
             self._save_all_tool_states()
         return sess.to_dict()
-
+    
     def restore_session(self, data: Dict[str, Any]) -> str:
         """从 save_session() 产生的 dict 恢复 session。返回 session_id。"""
         from .session import Session
         sess = Session.from_dict(data)
         self._init_session_hooks(sess)
-        self._sessions[sess.session_id] = sess
+        with self._sessions_lock:
+            self._sessions[sess.session_id] = sess
         return sess.session_id
 
     # --- 工具状态保存/恢复的内部实现 ---
-
     def _save_all_tool_states(self) -> None:
         """
-        保存当前 _active_session 中所有工具的状态到 session 的 tool_state 中。工具状态以 JSON 安全的格式保存，具体内容由工具的 get_session_state() 方法定义。
+        保存当前 active session 中所有工具的状态到 session 的 tool_state 中。工具状态以 JSON 安全的格式保存，具体内容由工具的 get_session_state() 方法定义。
 
         工具实例的可变状态会重置
-        
+
         子类可重写"""
-        sess = self._active_session
+        sess = self._get_active_session()
         if not sess:
             return
         for tool_name, tool in self.tool_registry.get_all_tools().items():
@@ -276,11 +308,11 @@ class Agent(ABC):
 
     def _restore_all_tool_states(self) -> None:
         """
-        从当前 _active_session 中恢复所有工具的状态。工具状态以 JSON 安全的格式保存，具体内容由工具的 get_session_state() 方法定义。
-        
+        从当前 active session 中恢复所有工具的状态。工具状态以 JSON 安全的格式保存，具体内容由工具的 get_session_state() 方法定义。
+
         子类可重写
         """
-        sess = self._active_session
+        sess = self._get_active_session()
         if not sess:
             return
         for tool_name, tool in self.tool_registry.get_all_tools().items():
@@ -289,57 +321,65 @@ class Agent(ABC):
 
 
     # --- Session 解析辅助 ---
-
     def _resolve_session(self, session_id: Optional[str]) -> "Session":
         """解析本次 run 使用的 session。
             - 如果 session_id 存在且有效，使用指定 session。
             - 否则如果有 active session，使用 active session。
             - 否则自动创建默认 session（仅第一次调用时创建）。
-            - 兼容旧版历史：如果没有 active session，消息历史仍保存在 agent._history 中。
+            - 兼容旧版历史：如果没有 active session，消息历史仍保存在 ContextVar 的默认 history 中。
             - 注意：session 切换会保存当前 session 的工具状态，但不会自动清理消息历史。子类可重写 _save/_restore_tool_states_impl 来实现更复杂的状态管理。
             - 设计目标是提供灵活的 session 管理，同时保持向后兼容和简单易用的接口。
-            - 未来版本可能会逐步废弃自动创建默认 session 和 agent._history，鼓励用户显式管理 session。
-            - 但目前保持兼容以避免破坏现有用户的使用习惯。
-        
+
             Returns:
                 解析获得的 Session 对象
         """
         if session_id:
-            if session_id not in self._sessions:
-                self.create_session(session_id=session_id)
-            return self._sessions[session_id]
-        if self._active_session:
-            return self._active_session
+            with self._sessions_lock:
+                if session_id in self._sessions:
+                    return self._sessions[session_id]
+            # Session 不存在，在锁外创建（create_session 内部会自行加锁）
+            self.create_session(session_id=session_id)
+            with self._sessions_lock:
+                return self._sessions[session_id]
+        active = self._get_active_session()
+        if active:
+            return active
         # 向后兼容：自动创建默认 session
-        if self._default_session_id is None:
-            self._default_session_id = self.create_session()
-        return self._sessions[self._default_session_id]
+        default_sid = self._get_default_session_id()
+        if default_sid is None:
+            default_sid = self.create_session()
+            self._set_default_session_id(default_sid)
+        with self._sessions_lock:
+            return self._sessions[default_sid]
 
     def deactivate_session(self) -> None:
-        """运行结束后保存工具状态。清理 _active_session """
+        """运行结束后保存工具状态。清理 active session"""
         self._save_all_tool_states()
-        self._active_session = None
-
+        self._set_active_session(None)
 
     def _cleanup_expired_sessions(self) -> None:
         """根据 max_sessions 和 TTL 清理过期/超量 session。"""
         max_sessions = self.config.max_sessions
         ttl = self.config.session_default_ttl
+        default_sid = self._get_default_session_id()
+        active = self._get_active_session()
         if ttl is not None:
-            expired = [sid for sid, s in self._sessions.items() if s.is_expired(ttl)]
+            with self._sessions_lock:
+                expired = [sid for sid, s in self._sessions.items() if s.is_expired(ttl)]
             for sid in expired:
-                if sid == self._default_session_id:
+                if sid == default_sid:
                     continue
                 self.destroy_session(sid)
-        if max_sessions and len(self._sessions) > max_sessions:
-            sorted_sessions = sorted(
-                [s for s in self._sessions.values()
-                 if s.session_id != self._default_session_id and s != self._active_session],
-                key=lambda s: s.updated_at,
-            )
-            to_remove = len(self._sessions) - max_sessions
-            for sess in sorted_sessions[:to_remove]:
-                del self._sessions[sess.session_id]
+        with self._sessions_lock:
+            if max_sessions and len(self._sessions) > max_sessions:
+                sorted_sessions = sorted(
+                    [s for s in self._sessions.values()
+                     if s.session_id != default_sid and s != active],
+                    key=lambda s: s.updated_at,
+                )
+                to_remove = len(self._sessions) - max_sessions
+                for sess in sorted_sessions[:to_remove]:
+                    del self._sessions[sess.session_id]
     
     @overload
     def register_session_hook(self, event: Literal["TurnStart"],
@@ -367,7 +407,9 @@ class Agent(ABC):
             if event not in self._default_session_hooks:
                 self._default_session_hooks[event] = []
             self._default_session_hooks[event].append(callback)
-            for sess in self._sessions.values():
+            with self._sessions_lock:
+                sessions = list(self._sessions.values())
+            for sess in sessions:
                 sess.hooks[event].append(callback)
 
     @overload
@@ -403,12 +445,11 @@ class Agent(ABC):
         """
         ...
 
-
     def _trigger_session_hooks(self, event: str, *args, sess: Optional["Session"] = None):
         """触发钩子。
-        
+
         1. session级别的钩子：若 sess 参数提供则仅触发那个 session 的钩子，否则触发 active session 的钩子。返回第一个非 None 的结果（如果有）。"""
-        target = sess or self._active_session
+        target = sess or self._get_active_session()
         if target is None:
             return None
         for callback in target.hooks.get(event, []):

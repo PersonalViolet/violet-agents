@@ -109,14 +109,14 @@ class ReactAgent(Agent):
     # --- 临时工具管理（操作 Session 中的字段） ---
 
     def _add_temp_tool(self, tool_schema_dict: Dict[str, Any], sess: Optional[Session] = None) -> None:
-        s = sess or self._active_session
+        s = sess or self._get_active_session()
         if s is None:
             return
         s.agent_state.setdefault("temp_tools", []).append(tool_schema_dict)
         s.agent_state.setdefault("temp_tools_names", set()).add(tool_schema_dict.get("function", {}).get("name"))
 
     def _cleanup_temp_tools(self, tools_to_remove: List[str], sess: Optional[Session] = None) -> None:
-        s = sess or self._active_session
+        s = sess or self._get_active_session()
         if s is None:
             return
         s.agent_state["temp_tools"] = [tool for tool in s.agent_state.get("temp_tools", [])
@@ -127,7 +127,7 @@ class ReactAgent(Agent):
                 del s.agent_state["temp_tools_last_call_round"][tool_name]
 
     def _check_temp_tools_expiry(self, sess: Optional[Session] = None) -> List[str]:
-        s = sess or self._active_session
+        s = sess or self._get_active_session()
         if s is None:
             return []
         expired_tools = []
@@ -139,7 +139,7 @@ class ReactAgent(Agent):
     # --- 内置钩子回调 ---
 
     def _handle_search_tools_hook(self, tool_response_message: Message) -> None:
-        sess = self._active_session
+        sess = self._get_active_session()
         if tool_response_message.tool_call_id and tool_response_message.metadata \
                 and tool_response_message.metadata.get("tool_type") == SearchToolsTool \
                 and tool_response_message.metadata.get("action") == "get":
@@ -152,7 +152,7 @@ class ReactAgent(Agent):
                 print(f"工具schema解析失败，确保工具返回的schema是有效的JSON字符串: {e}")
 
     def _on_temp_tool_called_hook(self, tool_call: ChatCompletionMessageFunctionToolCall) -> None:
-        sess = self._active_session
+        sess = self._get_active_session()
         if sess is None:
             return
         tool_name = tool_call.function.name

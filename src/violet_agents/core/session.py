@@ -155,10 +155,10 @@ class _SessionContext:
         self._previous_session = None
 
     def __enter__(self):
-        current = self.agent._active_session
+        current = self.agent._get_active_session()
         self._previous_session = current.session_id if current else None
         self.agent.switch_session(self.session_id)
-        return self.agent._active_session
+        return self.agent._get_active_session()
 
     def __exit__(self, *args):
         if self._previous_session:

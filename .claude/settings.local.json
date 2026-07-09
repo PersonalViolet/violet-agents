@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python -m pytest tests/test_session.py -v)",
       "Bash(python -m pytest tests/test_session.py::TestAgentSessionManagement::test_ttl_expiry -v)",
-      "Bash(python -m pytest tests/ -v)"
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pytest tests/ -v --tb=short)"
     ]
   }
 }

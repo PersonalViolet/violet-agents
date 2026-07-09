@@ -9,7 +9,7 @@ from ...core.llm import VioletAgentsLLM
 from ...core.config import Config
 import json
 
-SearchStrategy = Literal["embedding", "subAgent"]
+SearchStrategy = Literal["keyword", "subAgent"]
 
 
 
@@ -48,7 +48,7 @@ class SearchToolsTool(Tool):
 
     Attr:
         get_deferTools_callback (Callable[[], Dict[str, Tool]]): 一个回调函数，用于获取当前的懒加载工具列表，返回值是一个字典，键为工具名称，值为Tool对象
-        search_strategy (SearchStrategy): 搜索策略，支持"embedding"和"subAgent"两种策略，默认为"embedding"
+        search_strategy (SearchStrategy): 搜索策略，支持"keyword"和"subAgent"两种策略，默认为"keyword"
     """
 
     def __init__(self,
@@ -88,8 +88,8 @@ class SearchToolsTool(Tool):
     def _search_tools(self, query: str) -> list[Dict[str, str]]:
         defer_tools = self.get_deferTools_callback()
         tool_list = [{"name": tool.name, "description": tool.description} for tool in defer_tools.values()]
-        if self.search_strategy == "embedding":
-            return self._search_tools_embedding_based(query, tool_list)
+        if self.search_strategy == "keyword":
+            return self._search_tools_keyword_based(query, tool_list)
         elif self.search_strategy == "subAgent":
             return self._search_tools_subagent_based(query, tool_list)
 
@@ -120,75 +120,7 @@ class SearchToolsTool(Tool):
             return []
             
 
-
-
-
-    # def _search_tools_embedding_based(self, query: str, tool_list: list[Dict[str, str]]) -> list[Dict[str, str]]:
-    #     try:
-    #         from sklearn.feature_extraction.text import TfidfVectorizer
-    #         from sklearn.metrics.pairwise import cosine_similarity
-    #         import numpy as np
-    #         import jieba
-    #         import re
-
-    #         def smart_preprocessor(text):
-    #             # 检测是否包含中文字符
-    #             has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
-                
-    #             if has_chinese:
-    #                 # 如果包含中文，使用jieba分词
-    #                 words = jieba.cut(text)
-    #                 # 将分词结果用空格连接，同时保留英文单词
-    #                 processed = []
-    #                 for word in words:
-    #                     # 对于包含英文字母的词，保持原样或按字母分隔
-    #                     if re.search(r'[a-zA-Z]', word):
-    #                         processed.append(word)
-    #                     else:
-    #                         processed.append(word)
-    #                 return ' '.join(processed)
-    #             else:
-    #                 # 如果不包含中文，直接返回原文本（让TF-IDF自行处理）
-    #                 return text
-    #         # 准备文档
-    #         documents = [query] + [tool["name"] + ": " + tool["description"] for tool in tool_list]
-    #         # 预处理查询和文档
-    #         processed_query = smart_preprocessor(query)
-    #         processed_docs = [smart_preprocessor(doc) for doc in documents]
-    #         # TF-IDF向量化
-    #         vectorizer = TfidfVectorizer(stop_words=None, 
-    #                                      lowercase=True,
-    #                                      token_pattern=r'(?u)\b\w+(?:[-_]\w+)*\b|[\u4e00-\u9fff]+',  # 支持中英文混合
-    #                                      ngram_range=(1, 2))  # 同时考虑单词和二元组
-    #         all_texts = [processed_query] + processed_docs
-    #         tfidf_matrix = vectorizer.fit_transform(all_texts)
-
-    #         # 计算相似度
-    #         query_vector = tfidf_matrix[0:1]
-    #         doc_vector = tfidf_matrix[1:]
-    #         similarities = cosine_similarity(query_vector, doc_vector)
-            
-    #         # 获取相似度分数
-    #         similarity_scores = similarities[0]
-
-    #         # 使用argsort获取排序后的索引
-    #         sorted_indices = np.argsort(similarity_scores)[::-1]  # 降序排列
-            
-    #         # 获取前k个最相关的文档
-    #         top_indices = sorted_indices[:3]
-            
-    #         # 根据索引检索对应的文档
-    #         retrieved_docs = []
-    #         for idx in top_indices:
-    #             retrieved_docs.append(documents[idx + 1]) 
-    
-    #         return retrieved_docs
-
-    #     except Exception as e:
-    #         print(f"向量化检索失败")
-    #         return []
-
-    def _search_tools_embedding_based(self, query: str, tool_list: list[Dict[str, str]]) -> list[Dict[str, str]]:
+    def _search_tools_keyword_based(self, query: str, tool_list: list[Dict[str, str]]) -> list[Dict[str, str]]:
         """
         目前实现为简单的TF-IDF向量化检索并仅支持英文！！！
         基于向量化的工具搜索：将查询和工具的名称+描述进行TF-IDF向量化，然后计算查询与每个工具的相似度，返回相似度最高的几个工具
