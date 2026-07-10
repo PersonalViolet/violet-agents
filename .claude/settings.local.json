@@ -4,7 +4,11 @@
       "Bash(python -m pytest tests/test_session.py -v)",
       "Bash(python -m pytest tests/test_session.py::TestAgentSessionManagement::test_ttl_expiry -v)",
       "Bash(python -m pytest tests/ -v)",
-      "Bash(python -m pytest tests/ -v --tb=short)"
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python -m pytest tests/test_agent_thread_safety.py -v --tb=short)",
+      "Bash(python -c \"import violet_agents; print\\('顶级包导入成功'\\)\")",
+      "Bash(git stash *)",
+      "Bash(python -m pytest tests/test_skills_tool.py -v)"
     ]
   }
 }

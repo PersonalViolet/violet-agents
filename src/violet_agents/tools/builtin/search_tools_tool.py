@@ -8,7 +8,9 @@ from ...core.agent import Agent, SubAgent
 from ...core.llm import VioletAgentsLLM
 from ...core.config import Config
 import json
-
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ...core.session import Session
 SearchStrategy = Literal["keyword", "subAgent"]
 
 

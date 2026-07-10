@@ -7,7 +7,6 @@ from .llm import VioletAgentsLLM
 from .config import Config
 from .message import Message
 from collections import deque
-from ..tools.registry import ToolRegistry
 import os
 import uuid
 import contextvars
@@ -15,6 +14,7 @@ import threading
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .session import Session
+    from ..tools.registry import ToolRegistry
 class Agent(ABC):
 
     """Agent基类
@@ -43,13 +43,16 @@ class Agent(ABC):
                  llm: VioletAgentsLLM,
                  system_prompt: Optional[str] = None,
                  config: Optional[Config] = None,
-                 tool_registry: Optional[ToolRegistry] = None,
+                 tool_registry: Optional["ToolRegistry"] = None,
                  ):
         self.name = name
         self.llm = llm or VioletAgentsLLM()
         self.system_prompt = system_prompt
         self.config = config or Config()
-        self.tool_registry = tool_registry or ToolRegistry()
+        if tool_registry is None:
+            from ..tools.registry import ToolRegistry
+            tool_registry = ToolRegistry()
+        self.tool_registry = tool_registry
 
         self._agent_hooks: Dict[str, List[Callable]] = {
             "SessionInit": [],
