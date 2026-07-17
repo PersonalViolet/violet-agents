@@ -65,13 +65,20 @@ class Session:
     # --- 历史方法 ---
 
     def add_message(self, message: Message) -> None:
+        """将消息添加到历史中，并更新 updated_at 时间戳。
+        
+        Args:
+            message (Message): 要添加的消息对象
+        """
         self._history.append(message)
         self._touch()
 
     def get_history(self) -> deque:
+        """获取历史消息的副本，避免外部修改原始历史。"""
         return self._history.copy()
 
     def clear_history(self) -> None:
+        """清空历史消息，并更新 updated_at 时间戳。"""
         self._history.clear()
         self._touch()
 
@@ -157,6 +164,7 @@ class _SessionContext:
     def __enter__(self):
         current = self.agent._get_active_session()
         self._previous_session = current.session_id if current else None
+        self.agent._resolve_session(self.session_id)  # 确保 session 存在
         self.agent.switch_session(self.session_id)
         return self.agent._get_active_session()
 

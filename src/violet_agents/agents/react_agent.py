@@ -56,7 +56,6 @@ class ReactAgent(Agent):
 
 
     # --- 主运行循环 ---
-    # TODO 当前实现中需要在run里自己动态调用工具状态保存/恢复方法，未来可以考虑在切换 session 的时候自动调用，简化 run 方法的实现。
     def do_run(self, 
                input_text: str, 
                session: "Session", 

@@ -56,7 +56,6 @@ class Agent(ABC):
 
         self._agent_hooks: Dict[str, List[Callable]] = {
             "SessionInit": [],
-            "SessionSwitch": [],
             "PreSessionSwitch": [],
             "PostSessionSwitch": [],
         }
@@ -198,7 +197,7 @@ class Agent(ABC):
 
     # --- Session 生命周期 ---
     def create_session(self, session_id: Optional[str] = None, **kwargs) -> str:
-        """创建新 session，返回 session_id。不自动激活。"""
+        """创建新 session，返回 session_id。不自动激活。若未指定 session_id，则自动生成"""
         from .session import Session
         max_history = self.config.max_history_length
         sess = Session(
@@ -418,8 +417,8 @@ class Agent(ABC):
     @overload
     def registry_agent_hook(self, event: Literal["SessionInit"], callback: Callable[["Session"], None]) -> None: ...
 
-    @overload
-    def registry_agent_hook(self, event: Literal["SessionSwitch"], callback: Callable[["Session", "Session"], None]) -> None: ...
+    # @overload
+    # def registry_agent_hook(self, event: Literal["SessionSwitch"], callback: Callable[["Session", "Session"], None]) -> None: ...
 
     @overload
     def registry_agent_hook(self, event: Literal["PreSessionSwitch"], callback: Callable[["Session", "Session"], None]) -> None: ...
@@ -464,8 +463,8 @@ class Agent(ABC):
     @overload
     def _trigger_agent_hooks(self, event: Literal["SessionInit"], arg: "Session") -> None: ...
 
-    @overload
-    def _trigger_agent_hooks(self, event: Literal["SessionSwitch"], arg: Tuple["Session", "Session"]) -> None: ...
+    # @overload
+    # def _trigger_agent_hooks(self, event: Literal["SessionSwitch"], arg: Tuple["Session", "Session"]) -> None: ...
 
     @overload
     def _trigger_agent_hooks(self, event: Literal["PreSessionSwitch"], arg: Tuple["Session", "Session"]) -> None: ...

@@ -35,7 +35,6 @@ class SimpleAgent(Agent):
 
         sess.add_message(user_message)
         sess.add_message(response_message)
-        # self._deactivate_session()
         return response_message
 
 
