@@ -2,5 +2,6 @@
 
 from .simple_agent import SimpleAgent
 from .react_agent import ReactAgent, REACT_PROMPT
+from .factory import create_agent
 
-__all__ = ["SimpleAgent", "ReactAgent", "REACT_PROMPT"]
+__all__ = ["SimpleAgent", "ReactAgent", "REACT_PROMPT", "create_agent"]

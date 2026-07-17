@@ -16,6 +16,7 @@
 # --- Agent 层 ---
 from .agents.react_agent import ReactAgent, REACT_PROMPT
 from .agents.simple_agent import SimpleAgent
+from .agents.factory import create_agent
 
 # --- 核心层 ---
 from .core.agent import Agent, SubAgent
@@ -51,6 +52,7 @@ __all__ = [
     "ReactAgent",
     "REACT_PROMPT",
     "SimpleAgent",
+    "create_agent",
     # 核心层
     "Agent",
     "SubAgent",
