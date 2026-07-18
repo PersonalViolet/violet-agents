@@ -8,7 +8,9 @@
       "Bash(python -m pytest tests/test_agent_thread_safety.py -v --tb=short)",
       "Bash(python -c \"import violet_agents; print\\('顶级包导入成功'\\)\")",
       "Bash(git stash *)",
-      "Bash(python -m pytest tests/test_skills_tool.py -v)"
+      "Bash(python -m pytest tests/test_skills_tool.py -v)",
+      "Bash(python -m pytest tests/test_agent_arun.py -v --tb=short)",
+      "Bash(python -m pytest tests/test_agents.py tests/test_agent_thread_safety.py tests/test_agent_arun.py -v --tb=short)"
     ]
   }
 }

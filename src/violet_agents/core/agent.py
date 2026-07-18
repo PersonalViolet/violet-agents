@@ -1,5 +1,6 @@
 """Agent基类"""
-
+import asyncio
+import functools
 from abc import ABC, abstractmethod
 from typing import Any, Optional, List, Dict, overload, Callable, Literal, Set, TypeAlias, Annotated, Tuple, Union
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageFunctionToolCall
@@ -143,6 +144,29 @@ class Agent(ABC):
             session: run方法传入的 Session 对象，已由 run 方法解析获得并自动切换到该 session。实现类直接使用该参数即可。
         """
     
+
+    async def arun(self, input_text: str, session_id: Optional[str] = None, **kwargs) -> Message:
+        """异步运行Agent，处理输入并返回任务完成后的结果。
+
+        该方法会在后台线程中调用同步的 run 方法，适用于异步环境下的调用。
+        实现类无需重写该方法，只需实现 do_run 即可。
+        子类可以覆盖此方法实现更复杂的异步逻辑。
+
+        """
+        loop = asyncio.get_running_loop()
+        ctx = contextvars.copy_context()
+        func = functools.partial(self.run, input_text, session_id=session_id, **kwargs)
+        return await loop.run_in_executor(None, lambda: ctx.run(func))
+    
+    
+    def execute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
+        """
+        执行工具调用。该方法会将工具调用请求传递给 ToolRegistry 进行处理。
+        子类无需重写该方法，除非需要自定义工具调用的处理逻辑
+        """
+        if self.tool_registry is None:
+            raise RuntimeError("ToolRegistry is not initialized.")
+        return self.tool_registry.execute_tool(tool_call)
 
     # --- 历史方法（委托模式） ---
     def add_message(self,
