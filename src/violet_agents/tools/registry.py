@@ -6,6 +6,10 @@ from ..core.message import Message
 import json
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageFunctionToolCall
 from .interceptor import ToolInterceptor
+import concurrent.futures
+import asyncio
+import contextvars
+
 class ToolRegistry:
     """
     工具注册表，用于管理和调用工具
@@ -16,10 +20,20 @@ class ToolRegistry:
         interceptor (Optional[ToolInterceptor]): 可选的审批工具实例，如果提供了审批工具，在执行任何工具前都会先进行用户审批
 
     """
-    def __init__(self, interceptor: Optional[ToolInterceptor] = None):
+    def __init__(self, 
+                 interceptor: Optional[ToolInterceptor] = None,
+                 max_workers: int = 5):
+        """
+        初始化工具注册表
+
+        Args:
+            interceptor (Optional[ToolInterceptor], optional): 可选的审批工具实例. Defaults to None.
+            max_workers (int, optional): 线程池最大工作线程数，用于异步执行工具. Defaults to 5.
+        """
         self._tools: Dict[str, Tool] = {}
         self._defer_tools: Dict[str, Tool] = {} # 延迟工具字典，不会对外暴露，专门用于存储那些需要等到Agent发现后才调用的工具
         self.interceptor = interceptor
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
 
     
     def register_tool(self, 
@@ -127,6 +141,90 @@ class ToolRegistry:
                 return Message(role="tool", content=f"❌ 工具调用未通过用户的审批，已被用户拒绝: {tool_name}", tool_call_id=tool_call_id)
 
         return tool.run(parameters, tool_call_id)
+
+    def execute_tools(self, tool_calls: List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]) -> List[Message]:
+        """
+        批量串行执行工具调用
+
+        Args:
+            tool_calls (List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]): 工具调用信息列表
+
+        Returns:
+            List[Message]: 工具执行结果封装的Message对象列表
+        """
+        results = []
+        for tool_call in tool_calls:
+            result = self.execute_tool(tool_call)
+            results.append(result)
+        return results
+
+    def execute_tools_concurrently(self, tool_calls: List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]) -> List[Message]:
+        """
+        批量并发执行工具调用（同步），结果顺序与输入顺序一致。
+
+        Args:
+            tool_calls (List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]): 工具调用信息列表
+
+        Returns:
+            List[Message]: 工具执行结果封装的Message对象列表，与输入顺序一一对应
+        """
+        # 空列表直接返回
+        if not tool_calls:
+            return []
+
+        # 按索引提交任务，避免 as_completed 打乱顺序
+        future_to_index: dict[concurrent.futures.Future, int] = {}
+        for i, tool_call in enumerate(tool_calls):
+            ctx = contextvars.copy_context()
+            future = self.executor.submit(ctx.run, self.execute_tool, tool_call)
+            future_to_index[future] = i
+
+        # 预分配结果列表
+        results: list[Optional[Message]] = [None] * len(tool_calls)
+        exceptions: list[tuple[int, Exception]] = []
+
+        for future in concurrent.futures.as_completed(future_to_index):
+            idx = future_to_index[future]
+            try:
+                results[idx] = future.result()
+            except Exception as e:
+                exceptions.append((idx, e))
+
+        if exceptions:
+            # 如果有工具失败，抛出聚合异常并附带上下文信息
+            failed_names = [
+                f"tool_calls[{i}]: {type(e).__name__}: {e}"
+                for i, e in exceptions
+            ]
+            raise RuntimeError(
+                f"{len(exceptions)}/{len(tool_calls)} 个工具执行失败:\n" +
+                "\n".join(failed_names)
+            )
+
+        return results  # type: ignore[return-value]
+
+    async def aexecute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
+        loop = asyncio.get_running_loop()
+        def execute():
+            return self.execute_tool(tool_call=tool_call)
+        ctx = contextvars.copy_context()
+        result = await loop.run_in_executor(self.executor, ctx.run, execute)
+        return result
+    
+    async def aexecute_tools(self, tool_calls: List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]) -> List[Message]:
+        """
+        批量异步执行工具调用
+
+        Args:
+            tool_calls (List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]): 工具调用信息列表
+
+        Returns:
+            List[Message]: 工具执行结果封装的Message对象列表
+        """
+        tasks = [self.aexecute_tool(tool_call) for tool_call in tool_calls]
+        results = await asyncio.gather(*tasks)
+        return results
+        
 
     def get_openai_tools(self, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """

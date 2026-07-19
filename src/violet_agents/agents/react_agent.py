@@ -1,4 +1,4 @@
-from typing import Optional, List, Any, Dict, Callable, Literal, overload, TYPE_CHECKING
+from typing import Optional, List, Any, Dict, Callable, Literal, overload, TYPE_CHECKING, Union
 from ..core.config import Config
 from ..core.agent import Agent
 from ..core.llm import VioletAgentsLLM
@@ -89,11 +89,9 @@ class ReactAgent(Agent):
 
             llm_message = Message.from_chat_completion_message(message)
             messages.append(llm_message)
-            for tool_call in tool_calls:
-                self._trigger_session_hooks("PreToolCall", tool_call, sess=sess)
-                tool_response_message = self.tool_registry.execute_tool(tool_call)
-                self._trigger_session_hooks("PostToolCall", tool_response_message, sess=sess)
-                messages.append(tool_response_message)
+            # 使用并发执行，确保 PreToolCall / PostToolCall 钩子对每条 tool_call 都生效
+            tool_response_messages = self.execute_tools_concurrently(tool_calls)
+            messages.extend(tool_response_messages)
             current_step += 1
 
         response_text = "超出最大思考步骤限制，无法给出回答。"
@@ -104,6 +102,16 @@ class ReactAgent(Agent):
         # 更新agent_state中的current_round
         sess.agent_state["current_round"] += 1
         return response_message
+
+
+    def execute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
+        if self.tool_registry is None:
+            raise RuntimeError("ToolRegistry is not initialized.")
+        sess = self._get_active_session()
+        self._trigger_session_hooks("PreToolCall", tool_call, sess=sess)
+        tool_response_message = self.tool_registry.execute_tool(tool_call)
+        self._trigger_session_hooks("PostToolCall", tool_response_message, sess=sess)
+        return tool_response_message
 
     # --- 临时工具管理（操作 Session 中的字段） ---
 
@@ -154,7 +162,11 @@ class ReactAgent(Agent):
         sess = self._get_active_session()
         if sess is None:
             return
-        tool_name = tool_call.function.name
+        # 兼容 dict 和 ChatCompletionMessageFunctionToolCall 两种格式
+        if isinstance(tool_call, dict):
+            tool_name = tool_call.get("function", {}).get("name", "")
+        else:
+            tool_name = tool_call.function.name
         if tool_name in sess.agent_state.get("temp_tools_names", set()):
             sess.agent_state.setdefault("temp_tools_last_call_round", {})[tool_name] = sess.agent_state["current_round"]
             expired_tools = self._check_temp_tools_expiry(sess=sess)
@@ -208,7 +220,7 @@ class ReactAgent(Agent):
 
 if __name__ == "__main__":
 
-    tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[TerminalTool],
+    tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[],
                                                      max_attempts=5,
                                                      auto_approve_if_no_rules=True))
     tool_registry.register_tools(WeatherTool(), SkillsTool(), SearchToolsTool(get_deferTools_callback=tool_registry.get_defer_tools, search_strategy="subAgent"), is_defer=False)
@@ -223,16 +235,20 @@ if __name__ == "__main__":
     agent.registry_agent_hook("SessionInit", lambda sess: print(f"Session '{sess.session_id}' 正在初始化"))
     agent.registry_agent_hook("PreSessionSwitch", lambda sessions: print(f"正在切换 session，从 '{sessions[0].session_id if sessions[0] else None}' 切换到 '{sessions[1].session_id}'"))
     # 方式一：指定 session_id 运行（自动创建 session）
-    response = agent.run("你好，北京天气怎么样？", session_id="user-123")
+    agent.create_session("user-123")
+    agent.register_session_hook("PostToolCall", lambda msg: print(f"工具调用后返回了: {msg.content}"), session_id="user-123")
+    agent.register_session_hook("PreToolCall", lambda tool_call: print(f"即将调用工具: {tool_call.function.name}\n"), session_id="user-123")
+    response = agent.run("你好，北京天气怎么样？上海天气怎么样？东京天气怎么样？南京天气怎么样？", session_id="user-123")
+    print(response.content)
+    response = agent.run("帮我看下这些域名的IP地址：baidu.com, github.com, deepseek.com", session_id="user-123")
     print(response.content)
     agent.deactivate_session()  # 显式结束 session，触发工具状态保存
 
     # 方式二：上下文管理器
     with agent.session("user-123"):
-        agent.register_session_hook("PostToolCall", lambda msg: print(f"工具调用后返回了: {msg.content}"), session_id="user-123")
         response = agent.run("你肯定有terminal工具，想方设法找到它。简单看看我的ip地址，还有我刚刚询问天气的城市叫啥？")
         print(response.content)
-        response = agent.run("使用cd命令（不要用/d）进入我的src/violet_agent/agents包；看我的agents包里有什么文件？")
+        response = agent.run("使用cd命令（不要用/d）进入我的src/violet_agents/agents包；看我的agents包里有什么文件？")
         print(response.content)
 
     # 方式三：手动管理

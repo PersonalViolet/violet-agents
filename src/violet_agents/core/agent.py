@@ -1,5 +1,6 @@
 """Agent基类"""
 import asyncio
+import concurrent.futures
 import functools
 from abc import ABC, abstractmethod
 from typing import Any, Optional, List, Dict, overload, Callable, Literal, Set, TypeAlias, Annotated, Tuple, Union
@@ -45,6 +46,7 @@ class Agent(ABC):
                  system_prompt: Optional[str] = None,
                  config: Optional[Config] = None,
                  tool_registry: Optional["ToolRegistry"] = None,
+                 max_workers: int = 5
                  ):
         self.name = name
         self.llm = llm or VioletAgentsLLM()
@@ -54,6 +56,8 @@ class Agent(ABC):
             from ..tools.registry import ToolRegistry
             tool_registry = ToolRegistry()
         self.tool_registry = tool_registry
+
+        self._tool_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
 
         self._agent_hooks: Dict[str, List[Callable]] = {
             "SessionInit": [],
@@ -168,6 +172,45 @@ class Agent(ABC):
             raise RuntimeError("ToolRegistry is not initialized.")
         return self.tool_registry.execute_tool(tool_call)
 
+    def execute_tools_concurrently(self, tool_calls: List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]) -> List[Message]:
+        """批量并发执行工具调用（同步），结果顺序与输入顺序一致。
+
+        与 ToolRegistry.execute_tools_concurrently() 的关键区别：
+        本方法通过 self.execute_tool() 执行每个工具调用，因此子类（如 ReactAgent）重写
+        execute_tool() 后注入的 PreToolCall / PostToolCall 等钩子也会对并发路径生效。
+        """
+        if not tool_calls:
+            return []
+
+        # 使用 Agent 自身的线程池提交任务，确保 self.execute_tool() 被子类正确分发
+        future_to_index: dict[concurrent.futures.Future, int] = {}
+        for i, tool_call in enumerate(tool_calls):
+            ctx = contextvars.copy_context()
+            future = self._tool_executor.submit(ctx.run, self.execute_tool, tool_call)
+            future_to_index[future] = i
+
+        results: list[Optional[Message]] = [None] * len(tool_calls)
+        exceptions: list[tuple[int, Exception]] = []
+
+        for future in concurrent.futures.as_completed(future_to_index):
+            idx = future_to_index[future]
+            try:
+                results[idx] = future.result()
+            except Exception as e:
+                exceptions.append((idx, e))
+
+        if exceptions:
+            failed_names = [
+                f"tool_calls[{i}]: {type(e).__name__}: {e}"
+                for i, e in exceptions
+            ]
+            raise RuntimeError(
+                f"{len(exceptions)}/{len(tool_calls)} 个工具执行失败:\n" +
+                "\n".join(failed_names)
+            )
+
+        return results  # type: ignore[return-value]
+    
     # --- 历史方法（委托模式） ---
     def add_message(self,
                     message: Message,
