@@ -10,7 +10,7 @@ from ..tools.builtin.weather_tool import WeatherTool
 from ..tools.builtin.terminal_tool import TerminalTool
 from ..tools.builtin.skills_tool import SkillsTool
 from ..tools.builtin.search_tools_tool import SearchToolsTool
-from ..tools import DefaultApprovalTool
+from ..tools import ConsoleConfirmInterceptor
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageFunctionToolCall
 from collections import deque
 import json
@@ -190,7 +190,7 @@ class ReactAgent(Agent):
 # if __name__ == "__main__":
 #     load_dotenv(dotenv_path="D:/My-Project/violet_agents/.env")
 #     llm = VioletAgentsLLM(provider='deepseek')
-#     tool_registry = ToolRegistry(DefaultApprovalTool(require_approval_tools=[TerminalTool],
+#     tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[TerminalTool],
 #                                                      max_attempts=5,
 #                                                      auto_approve_if_no_rules=True))
 #     weather_tool = WeatherTool()
@@ -208,7 +208,7 @@ class ReactAgent(Agent):
 
 if __name__ == "__main__":
 
-    tool_registry = ToolRegistry(DefaultApprovalTool(require_approval_tools=[TerminalTool],
+    tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[TerminalTool],
                                                      max_attempts=5,
                                                      auto_approve_if_no_rules=True))
     tool_registry.register_tools(WeatherTool(), SkillsTool(), SearchToolsTool(get_deferTools_callback=tool_registry.get_defer_tools, search_strategy="subAgent"), is_defer=False)

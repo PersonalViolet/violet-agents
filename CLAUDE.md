@@ -46,9 +46,9 @@ python -m src.violet_agents.agents.react_agent
 ### 工具系统 (`src/violet_agents/tools/`)
 
 - **Tool** (`base.py`): 抽象基类，子类必须实现 `run(parameters, tool_call_id) -> Message` 和 `get_parameters() -> ToolParameters`。
-- **ToolRegistry** (`registry.py`): 管理 `_tools`（普通工具，对外暴露给 LLM）和 `_defer_tools`（延迟工具，不暴露给 LLM，需通过 SearchToolsTool 发现后调用）。执行工具前通过 `ApprovalTool` 做人工审批。
-- **ApprovalTool** (`approval_tool.py`): 审批规则 —— `require_approval_tools` 优先于 `auto_approve_tools`，都不匹配时依 `auto_approve_if_no_rules` 决定。
-- **DefaultApprovalTool** (`infrastructure/`): 终端交互式审批，`input()` 确认，最多重试 `max_attempts` 次。
+- **ToolRegistry** (`registry.py`): 管理 `_tools`（普通工具，对外暴露给 LLM）和 `_defer_tools`（延迟工具，不暴露给 LLM，需通过 SearchToolsTool 发现后调用）。执行工具前通过 `ToolInterceptor` 做拦截/审批。
+- **ToolInterceptor** (`interceptor.py`): 拦截器基类，拦截规则 —— `intercept_list` 优先于 `whitelist`，都不匹配时依 `auto_approve_if_no_rules` 决定。
+- **ConsoleConfirmInterceptor** (`infrastructure/`): 终端交互式拦截确认，`input()` 确认，最多重试 `max_attempts` 次。
 
 **内置工具**（`builtin/`）：
 - `WeatherTool`: 模拟天气查询（返回固定数据）。

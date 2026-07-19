@@ -7,8 +7,8 @@ from .base import Tool, ToolProperty, ToolParameters
 from .registry import ToolRegistry
 
 # 审批
-from .approval_tool import ApprovalTool
-from .infrastructure.default_approval_tool import DefaultApprovalTool
+from .interceptor import ToolInterceptor
+from .infrastructure.console_interceptor import ConsoleConfirmInterceptor
 
 # 内置工具（从 builtin 子包导入）
 from .builtin import (
@@ -27,8 +27,8 @@ __all__ = [
     # 注册表
     "ToolRegistry",
     # 审批
-    "ApprovalTool",
-    "DefaultApprovalTool",
+    "ToolInterceptor",
+    "ConsoleConfirmInterceptor",
     # 内置工具
     "WeatherTool",
     "SkillsTool",

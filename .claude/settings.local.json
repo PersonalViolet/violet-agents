@@ -10,7 +10,8 @@
       "Bash(git stash *)",
       "Bash(python -m pytest tests/test_skills_tool.py -v)",
       "Bash(python -m pytest tests/test_agent_arun.py -v --tb=short)",
-      "Bash(python -m pytest tests/test_agents.py tests/test_agent_thread_safety.py tests/test_agent_arun.py -v --tb=short)"
+      "Bash(python -m pytest tests/test_agents.py tests/test_agent_thread_safety.py tests/test_agent_arun.py -v --tb=short)",
+      "Bash(python -c \"from src.violet_agents.tools import ToolInterceptor, ConsoleConfirmInterceptor; print\\('导入成功:', ToolInterceptor, ConsoleConfirmInterceptor\\)\")"
     ]
   }
 }

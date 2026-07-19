@@ -8,9 +8,9 @@
 - Tool / ToolRegistry: 工具系统
 - ReactAgent / SimpleAgent: 内置 Agent 实现
 
-工具审批:
-- ApprovalTool: 审批基类
-- DefaultApprovalTool: 终端交互式审批
+工具拦截:
+- ToolInterceptor: 拦截器基类
+- ConsoleConfirmInterceptor: 终端交互式拦截确认
 """
 
 # --- Agent 层 ---
@@ -34,8 +34,8 @@ from .core.session import Session
 
 # --- 工具系统 ---
 from .tools import (
-    ApprovalTool,
-    DefaultApprovalTool,
+    ToolInterceptor,
+    ConsoleConfirmInterceptor,
     SearchToolsTool,
     SkillsTool,
     TerminalTool,
@@ -74,8 +74,8 @@ __all__ = [
     "ToolParameters",
     "ToolProperty",
     "ToolRegistry",
-    "ApprovalTool",
-    "DefaultApprovalTool",
+    "ToolInterceptor",
+    "ConsoleConfirmInterceptor",
     # 内置工具
     "WeatherTool",
     "SkillsTool",

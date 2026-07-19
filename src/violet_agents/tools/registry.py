@@ -5,7 +5,7 @@ from .base import Tool
 from ..core.message import Message
 import json
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageFunctionToolCall
-from .approval_tool import ApprovalTool
+from .interceptor import ToolInterceptor
 class ToolRegistry:
     """
     工具注册表，用于管理和调用工具
@@ -13,13 +13,13 @@ class ToolRegistry:
     Attributes:
         _tools (Dict[str, Tool]): 已注册的工具字典，键为工具名称，值为Tool对象
         _defer_tools (Dict[str, Tool]): 延迟工具字典，专门用于存储那些需要等到Agent发现后才调用的工具
-        approval_tool (Optional[ApprovalTool]): 可选的审批工具实例，如果提供了审批工具，在执行任何工具前都会先进行用户审批
+        interceptor (Optional[ToolInterceptor]): 可选的审批工具实例，如果提供了审批工具，在执行任何工具前都会先进行用户审批
 
     """
-    def __init__(self, approval_tool: Optional[ApprovalTool] = None):
+    def __init__(self, interceptor: Optional[ToolInterceptor] = None):
         self._tools: Dict[str, Tool] = {}
         self._defer_tools: Dict[str, Tool] = {} # 延迟工具字典，不会对外暴露，专门用于存储那些需要等到Agent发现后才调用的工具
-        self.approval_tool = approval_tool
+        self.interceptor = interceptor
 
     
     def register_tool(self, 
@@ -121,8 +121,8 @@ class ToolRegistry:
         if not tool.validate_parameters(parameters):
             raise ValueError(f"工具 {tool_name} 参数验证失败，缺少必要参数")
         
-        if self.approval_tool:
-            approved = self.approval_tool.approve(tool, parameters, tool_call_id)
+        if self.interceptor:
+            approved = self.interceptor.intercept(tool, parameters, tool_call_id)
             if not approved:
                 return Message(role="tool", content=f"❌ 工具调用未通过用户的审批，已被用户拒绝: {tool_name}", tool_call_id=tool_call_id)
 
