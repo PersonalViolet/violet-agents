@@ -17,6 +17,14 @@
             "type": "debugpy",
             "request": "launch",
             "module": "src.violet_agents.agents.react_agent"
+        },
+        // 调试当前文件
+        {
+            "name": "Python 调试程序: 当前文件",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
         }
     ]
 }
