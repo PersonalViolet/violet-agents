@@ -840,6 +840,457 @@ class TestGetOpenAITools:
         assert len(tools) == 1
 
 
+# ---------------------------------------------------------------------------
+# 动态注册测试（register_dynamic_tools / unregister_dynamic_tools）
+# ---------------------------------------------------------------------------
+
+class TestDynamicRegistration:
+    """测试动态工具源的注册、查询、执行与解注册。"""
+
+    # ---- register_dynamic_tools 基础 ----
+
+    def test_register_dynamic_normal_tools(self):
+        """动态注册普通工具后，get_tool 可查到。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+
+        tool = registry.get_tool("echo")
+        assert tool is not None
+        assert tool.name == "echo"
+
+    def test_register_dynamic_defer_tools(self):
+        """动态注册延迟工具后，get_tool 查不到但 get_all_tools 可查到。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source, is_defer=True)
+
+        dynamic_source["echo"] = EchoTool()
+
+        assert registry.get_tool("echo") is None
+        assert "echo" in registry.get_all_tools()
+        assert "echo" in registry.get_defer_tools()
+
+    def test_chain_calling(self):
+        """register_dynamic_tools 返回 self，支持链式调用。"""
+        registry = ToolRegistry()
+        src_a: Dict[str, Tool] = {}
+        src_b: Dict[str, Tool] = {}
+
+        result = registry.register_dynamic_tools(src_a).register_dynamic_tools(src_b, is_defer=True)
+        assert result is registry
+
+    # ---- 外部增删改的实时反映 ----
+
+    def test_external_addition_reflected(self):
+        """外部向动态源添加工具后，注册表实时感知。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        # 注册表初始为空
+        assert registry.get_tool("echo") is None
+
+        # 外部添加
+        dynamic_source["echo"] = EchoTool()
+        assert registry.get_tool("echo") is not None
+
+        # 外部再添加
+        dynamic_source["add"] = AddTool()
+        assert registry.get_tool("add") is not None
+        assert registry.get_tool("echo") is not None
+
+    def test_external_deletion_reflected(self):
+        """外部从动态源删除工具后，注册表实时感知。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+        assert registry.get_tool("echo") is not None
+
+        del dynamic_source["echo"]
+        assert registry.get_tool("echo") is None
+
+    def test_external_modification_reflected(self):
+        """外部修改动态源中工具的值后，注册表实时感知新值。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        echo1 = EchoTool()
+        dynamic_source["echo"] = echo1
+        assert registry.get_tool("echo") is echo1
+
+        echo2 = EchoTool()
+        dynamic_source["echo"] = echo2
+        assert registry.get_tool("echo") is echo2
+        assert registry.get_tool("echo") is not echo1
+
+    def test_external_clear_reflected(self):
+        """外部 clear() 动态源后，注册表中该源的工具全部消失。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+        dynamic_source["add"] = AddTool()
+        assert registry.get_tool("echo") is not None
+        assert registry.get_tool("add") is not None
+
+        dynamic_source.clear()
+
+        assert registry.get_tool("echo") is None
+        assert registry.get_tool("add") is None
+
+    # ---- 多动态源 ----
+
+    def test_multiple_dynamic_sources(self):
+        """多个动态源同时生效，按注册顺序查找（先注册的优先级低）。"""
+        registry = ToolRegistry()
+        src_a: Dict[str, Tool] = {}
+        src_b: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(src_a)
+        registry.register_dynamic_tools(src_b)
+
+        # 两个源都有同名工具 → 后注册的 src_b 因为 _resolve_tool 遍历顺序，先被找到
+        src_a["echo"] = EchoTool()
+        echo_b = EchoTool()
+        src_b["echo"] = echo_b
+
+        # _resolve_tool 按 _dynamic_sources 列表顺序遍历，先注册的在前
+        # 所以 src_a 先被命中
+        assert registry.get_tool("echo") is src_a["echo"]
+
+    # ---- 优先级：显式注册 > 动态源 ----
+
+    def test_explicit_overrides_dynamic(self):
+        """显式注册的同名工具优先于动态源中的工具。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_echo = EchoTool()
+        dynamic_source["echo"] = dynamic_echo
+
+        explicit_echo = EchoTool()
+        registry.register_tool(explicit_echo)
+
+        assert registry.get_tool("echo") is explicit_echo
+        assert registry.get_tool("echo") is not dynamic_echo
+
+    def test_explicit_overrides_dynamic_defer(self):
+        """显式注册的延迟工具优先于动态延迟源中的同名工具。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source, is_defer=True)
+
+        dynamic_echo = EchoTool()
+        dynamic_source["echo"] = dynamic_echo
+
+        explicit_echo = EchoTool()
+        registry.register_tool(explicit_echo, is_defer=True)
+
+        defer_tools = registry.get_defer_tools()
+        assert defer_tools["echo"] is explicit_echo
+
+    # ---- execute_tool 支持 ----
+
+    def test_execute_dynamic_normal_tool(self):
+        """通过 execute_tool 执行动态普通源中的工具。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+
+        tc = make_dict_tool_call("echo", {"message": "dynamic exec"})
+        result = registry.execute_tool(tc)
+
+        assert result.role == "tool"
+        assert "dynamic exec" in result.content
+
+    def test_execute_dynamic_defer_tool(self):
+        """通过 execute_tool 执行动态延迟源中的工具。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source, is_defer=True)
+
+        dynamic_source["echo"] = EchoTool()
+
+        tc = make_dict_tool_call("echo", {"message": "dynamic defer"})
+        result = registry.execute_tool(tc)
+
+        assert "dynamic defer" in result.content
+
+    def test_execute_dynamic_tool_removed_after_registration(self):
+        """动态源中的工具被外部删除后，execute_tool 报未注册。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+
+        # 删除
+        del dynamic_source["echo"]
+
+        tc = make_dict_tool_call("echo", {"message": "gone"})
+        with pytest.raises(ValueError, match="未注册"):
+            registry.execute_tool(tc)
+
+    # ---- get_openai_tools 支持 ----
+
+    def test_get_openai_tools_includes_dynamic(self):
+        """get_openai_tools 包含动态普通源中的工具。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+
+        tools = registry.get_openai_tools()
+        names = {t["function"]["name"] for t in tools}
+        assert "echo" in names
+
+    def test_get_openai_tools_excludes_dynamic_defer(self):
+        """get_openai_tools 不包含动态延迟源中的工具。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source, is_defer=True)
+
+        dynamic_source["echo"] = EchoTool()
+
+        tools = registry.get_openai_tools()
+        names = {t["function"]["name"] for t in tools}
+        assert "echo" not in names
+
+    def test_get_openai_tools_dynamic_and_explicit_merged(self):
+        """get_openai_tools 合并显式注册和动态源，显式优先。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+        registry.register_tool(AddTool())
+
+        tools = registry.get_openai_tools()
+        names = {t["function"]["name"] for t in tools}
+        assert names == {"echo", "add"}
+
+    def test_get_openai_tools_by_name_from_dynamic_source(self):
+        """get_openai_tools 按名称过滤时也能查到动态源中的工具。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+        dynamic_source["add"] = AddTool()
+
+        tools = registry.get_openai_tools(tool_names=["echo"])
+        assert len(tools) == 1
+        assert tools[0]["function"]["name"] == "echo"
+
+    # ---- get_all_tools / get_defer_tools 支持 ----
+
+    def test_get_all_tools_includes_all_dynamic_sources(self):
+        """get_all_tools 包含所有动态源（普通 + 延迟）。"""
+        registry = ToolRegistry()
+        src_normal: Dict[str, Tool] = {}
+        src_defer: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(src_normal)
+        registry.register_dynamic_tools(src_defer, is_defer=True)
+
+        src_normal["echo"] = EchoTool()
+        src_defer["add"] = AddTool()
+
+        all_tools = registry.get_all_tools()
+        assert "echo" in all_tools
+        assert "add" in all_tools
+
+    def test_get_defer_tools_includes_dynamic_defer(self):
+        """get_defer_tools 包含动态延迟源中的工具。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source, is_defer=True)
+
+        dynamic_source["echo"] = EchoTool()
+
+        defer_tools = registry.get_defer_tools()
+        assert "echo" in defer_tools
+
+    # ---- unregister_dynamic_tools ----
+
+    def test_unregister_dynamic_tools(self):
+        """解注册后，动态源变更不再反映到注册表。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+        assert registry.get_tool("echo") is not None
+
+        registry.unregister_dynamic_tools(dynamic_source)
+
+        # 解注册后查不到
+        assert registry.get_tool("echo") is None
+        # 但原始字典不受影响
+        assert "echo" in dynamic_source
+
+    def test_unregister_dynamic_tools_chain(self):
+        """unregister_dynamic_tools 返回 self，支持链式调用。"""
+        registry = ToolRegistry()
+        src: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(src)
+
+        result = registry.unregister_dynamic_tools(src)
+        assert result is registry
+
+    def test_unregister_not_registered_source_raises(self):
+        """解注册未注册的源时抛 ValueError。"""
+        registry = ToolRegistry()
+        unknown_source: Dict[str, Tool] = {}
+
+        with pytest.raises(ValueError, match="未注册"):
+            registry.unregister_dynamic_tools(unknown_source)
+
+    def test_unregister_then_reregister(self):
+        """解注册后重新注册同一个源，再次生效。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+        registry.unregister_dynamic_tools(dynamic_source)
+        assert registry.get_tool("echo") is None
+
+        # 重新注册
+        registry.register_dynamic_tools(dynamic_source)
+        assert registry.get_tool("echo") is not None
+
+    # ---- reset_all_tools 支持 ----
+
+    def test_reset_all_tools_resets_dynamic_source_tools(self):
+        """reset_all_tools 对动态源中的工具也调用 reset()。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        tool = EchoTool()
+        dynamic_source["echo"] = tool
+
+        # reset_all_tools 不抛异常即通过
+        registry.reset_all_tools()
+
+    # ---- 拦截器支持 ----
+
+    def test_interceptor_works_with_dynamic_tool(self):
+        """拦截器对动态源中的工具同样生效。"""
+        spy = SpyInterceptor()
+        registry = ToolRegistry(interceptor=spy)
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+
+        tc = make_dict_tool_call("echo", {"message": "spied"})
+        result = registry.execute_tool(tc)
+
+        assert "spied" in result.content
+        assert len(spy.intercepted) == 1
+        assert spy.intercepted[0][0] == "echo"
+
+    def test_interceptor_rejects_dynamic_tool(self):
+        """拦截器拒绝动态源中的工具时，返回拒绝消息。"""
+        interceptor = AlwaysRejectInterceptor()
+        registry = ToolRegistry(interceptor=interceptor)
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_source["echo"] = EchoTool()
+
+        tc = make_dict_tool_call("echo", {"message": "blocked"})
+        result = registry.execute_tool(tc)
+
+        assert "❌" in result.content
+
+    # ---- 边界场景 ----
+
+    def test_dynamic_source_with_none_value(self):
+        """动态源中 key 存在但值为 None 时视为不存在。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        # 直接插入 None（虽然类型标注不允许，但运行时可能发生）
+        dynamic_source["echo"] = None  # type: ignore
+
+        assert registry.get_tool("echo") is None
+
+    def test_dynamic_source_starts_empty(self):
+        """注册空动态源后查询不报错。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        assert registry.get_tool("nothing") is None
+        assert registry.get_all_tools() == {}
+        assert registry.get_openai_tools() == []
+
+    def test_dynamic_source_added_then_queried_multiple_times(self):
+        """多次查询动态源中的工具，结果一致。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        tool = EchoTool()
+        dynamic_source["echo"] = tool
+
+        for _ in range(5):
+            assert registry.get_tool("echo") is tool
+
+    def test_multiple_dynamic_sources_same_tool_name(self):
+        """多个动态源有同名工具时，按注册顺序返回第一个命中的。"""
+        registry = ToolRegistry()
+        src_a: Dict[str, Tool] = {}
+        src_b: Dict[str, Tool] = {}
+
+        # 注册顺序：src_a 先，src_b 后
+        registry.register_dynamic_tools(src_a)
+        registry.register_dynamic_tools(src_b)
+
+        echo_a = EchoTool()
+        echo_b = EchoTool()
+        src_a["echo"] = echo_a
+        src_b["echo"] = echo_b
+
+        # _resolve_tool 遍历 _dynamic_sources 列表，src_a 先被访问
+        assert registry.get_tool("echo") is echo_a
+
+    def test_explicit_defer_before_dynamic(self):
+        """显式延迟工具优先级高于动态普通源中的同名工具。"""
+        registry = ToolRegistry()
+        dynamic_source: Dict[str, Tool] = {}
+        registry.register_dynamic_tools(dynamic_source)
+
+        dynamic_echo = EchoTool()
+        dynamic_source["echo"] = dynamic_echo
+
+        explicit_echo = EchoTool()
+        registry.register_tool(explicit_echo, is_defer=True)
+
+        # get_tool 查 _tools + _dynamic_sources，不查 defer
+        # dynamic_source 中有 echo → 返回 dynamic_echo
+        assert registry.get_tool("echo") is dynamic_echo
+
+        # execute_tool 用 _resolve_tool，按优先级 _tools > _dynamic_sources > _defer_tools
+        # _tools 无 → _dynamic_sources 有 → 返回 dynamic_echo（不走到 _defer_tools）
+        tc = make_dict_tool_call("echo", {"message": "test"})
+        result = registry.execute_tool(tc)
+        assert "test" in result.content
+
+
 class TestResetAllTools:
     """测试 reset_all_tools。"""
 

@@ -32,6 +32,9 @@ class ToolRegistry:
         """
         self._tools: Dict[str, Tool] = {}
         self._defer_tools: Dict[str, Tool] = {} # 延迟工具字典，不会对外暴露，专门用于存储那些需要等到Agent发现后才调用的工具
+        # 动态工具源：持有外部可变字典的引用，查询时实时反映外部变更
+        self._dynamic_sources: List[Dict[str, Tool]] = []
+        self._dynamic_defer_sources: List[Dict[str, Tool]] = []
         self.interceptor = interceptor
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
 
@@ -78,17 +81,117 @@ class ToolRegistry:
             self.register_tool(tool, is_defer=is_defer)
         return self
 
+    def register_dynamic_tools(
+        self,
+        tools_source: Dict[str, Tool],
+        is_defer: bool = False
+    ) -> "ToolRegistry":
+        """
+        动态注册一批工具。传入的 tools_source 是一个可变字典，由外部代码创建和维护。
+        注册表仅持有该字典的引用，查询工具时会实时反映外部对该字典的修改。
+
+        适用场景：工具集由其他模块动态管理（如 MCP 协议发现的远程工具、插件系统等），
+        注册表无需手动同步即可感知外部增删改。
+
+        Args:
+            tools_source: 工具字典，键为工具名称，值为 Tool 对象。
+                          该字典由外部代码创建和维护，注册表持有其引用。
+            is_defer: 是否注册到延迟工具区，默认注册到普通工具区。
+
+        Returns:
+            self，支持链式调用
+
+        Example:
+            >>> registry = ToolRegistry()
+            >>> mcp_tools: Dict[str, Tool] = {}
+            >>> registry.register_dynamic_tools(mcp_tools)
+            >>> # 外部代码添加工具
+            >>> mcp_tools["remote_search"] = RemoteSearchTool()
+            >>> # 注册表自动感知
+            >>> tool = registry.get_tool("remote_search")  # 返回 RemoteSearchTool
+        """
+        if is_defer:
+            self._dynamic_defer_sources.append(tools_source)
+        else:
+            self._dynamic_sources.append(tools_source)
+        return self
+
+    def unregister_dynamic_tools(self, tools_source: Dict[str, Tool]) -> "ToolRegistry":
+        """
+        移除之前通过 register_dynamic_tools 注册的动态工具源。
+
+        Args:
+            tools_source: 之前注册的动态工具字典引用。
+
+        Returns:
+            self，支持链式调用
+
+        Raises:
+            ValueError: 如果 tools_source 未曾注册过。
+        """
+        if tools_source in self._dynamic_sources:
+            self._dynamic_sources.remove(tools_source)
+        elif tools_source in self._dynamic_defer_sources:
+            self._dynamic_defer_sources.remove(tools_source)
+        else:
+            raise ValueError("指定的动态工具源未注册")
+        return self
+
+    def _resolve_tool(self, name: str) -> Optional[Tool]:
+        """
+        在所有工具源中按优先级查找工具：
+        _tools > _dynamic_sources > _defer_tools > _dynamic_defer_sources
+
+        显式注册的工具优先于动态源中的同名工具。
+        """
+        if name in self._tools:
+            return self._tools[name]
+        for source in self._dynamic_sources:
+            if name in source:
+                return source[name]
+        if name in self._defer_tools:
+            return self._defer_tools[name]
+        for source in self._dynamic_defer_sources:
+            if name in source:
+                return source[name]
+        return None
+
     def get_tool(self, name: str) -> Optional[Tool]:
-        """获取在_tools的Tool对象"""
-        return self._tools.get(name)
+        """
+        获取指定名称的普通工具对象（不包含延迟工具）。
+        查找优先级：_tools > _dynamic_sources
+        """
+        if name in self._tools:
+            return self._tools[name]
+        for source in self._dynamic_sources:
+            if name in source:
+                return source[name]
+        return None
 
     def get_defer_tools(self) -> Dict[str, Tool]:
-        """获取所有延迟工具"""
-        return self._defer_tools
+        """
+        获取所有延迟工具（包括动态延迟源）。
+        显式注册的延迟工具优先于动态延迟源中的同名工具。
+        """
+        result: Dict[str, Tool] = {}
+        for source in self._dynamic_defer_sources:
+            result.update(source)
+        result.update(self._defer_tools)
+        return result
 
     def get_all_tools(self) -> Dict[str, Tool]:
-        """获取所有工具（包括普通工具和延迟工具）"""
-        all_tools = self._tools.copy()
+        """
+        获取所有工具（包括普通工具、延迟工具及所有动态源中的工具）。
+        优先级：显式注册 > 动态源；普通工具 > 延迟工具。
+        """
+        all_tools: Dict[str, Tool] = {}
+        # 先收集动态源（优先级低）
+        for source in self._dynamic_sources:
+            all_tools.update(source)
+        for source in self._dynamic_defer_sources:
+            all_tools.update(source)
+        # 显式注册的工具覆写（优先级高）
+        all_tools.update(self._tools)
         all_tools.update(self._defer_tools)
         return all_tools
 
@@ -123,14 +226,9 @@ class ToolRegistry:
         except json.JSONDecodeError as e:
             raise ValueError(f"工具参数解析失败，确保参数是有效的JSON字符串: {e}")
 
-        if tool_name not in self._tools and tool_name not in self._defer_tools:
+        tool = self._resolve_tool(tool_name)
+        if tool is None:
             raise ValueError(f"工具 {tool_name} 未注册")
-        if tool_name in self._tools:
-            tool = self._tools[tool_name]
-        elif tool_name in self._defer_tools:
-            tool = self._defer_tools[tool_name]
-        else:
-            raise ValueError(f"工具 {tool_name} 未找到")
         
         if not tool.validate_parameters(parameters):
             raise ValueError(f"工具 {tool_name} 参数验证失败，缺少必要参数")
@@ -228,19 +326,38 @@ class ToolRegistry:
 
     def get_openai_tools(self, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
-        获取指定工具列表，转换为OpenAI API要求的格式
+        获取指定工具列表，转换为OpenAI API要求的格式。
+        包含显式注册的普通工具和动态普通工具源中的工具，
+        显式注册的工具优先于动态源中的同名工具。
 
         Args:
-            tool_names (List[str]): 工具名称列表
+            tool_names (List[str]): 工具名称列表，为 None 时返回所有普通工具
 
         Returns:
             List[Dict[str, Any]]: 工具列表
         """
         if tool_names is None:
-            return [tool.to_openai_dict() for tool in self._tools.values()]
-        return [self._tools[name].to_openai_dict() for name in tool_names if name in self._tools]
+            # 构建合并视图：动态源 + 显式注册（显式覆写动态同名工具）
+            merged: Dict[str, Tool] = {}
+            for source in self._dynamic_sources:
+                merged.update(source)
+            merged.update(self._tools)
+            return [tool.to_openai_dict() for tool in merged.values()]
+        else:
+            results = []
+            for name in tool_names:
+                tool = self._resolve_tool(name)
+                if tool is not None:
+                    results.append(tool.to_openai_dict())
+            return results
 
     def reset_all_tools(self) -> None:
-        """重置所有已注册工具到初始状态。"""
+        """重置所有已注册工具（包括动态源中的工具）到初始状态。"""
         for tool in list(self._tools.values()) + list(self._defer_tools.values()):
             tool.reset()
+        for source in self._dynamic_sources:
+            for tool in source.values():
+                tool.reset()
+        for source in self._dynamic_defer_sources:
+            for tool in source.values():
+                tool.reset()
