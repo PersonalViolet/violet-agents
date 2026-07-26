@@ -45,6 +45,8 @@ from .tools import (
     ToolProperty,
     ToolRegistry,
     WeatherTool,
+    MCPTool,
+    MCPWrappedTool,
 )
 
 __all__ = [
@@ -82,4 +84,6 @@ __all__ = [
     "SearchToolsTool",
     "TerminalTool",
     "TodoWriteTool",
+    "MCPTool",
+    "MCPWrappedTool",
 ]

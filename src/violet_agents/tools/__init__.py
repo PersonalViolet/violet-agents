@@ -17,6 +17,8 @@ from .builtin import (
     SearchToolsTool,
     TerminalTool,
     TodoWriteTool,
+    MCPTool,
+    MCPWrappedTool,
 )
 
 __all__ = [
@@ -35,4 +37,6 @@ __all__ = [
     "SearchToolsTool",
     "TerminalTool",
     "TodoWriteTool",
+    "MCPTool",
+    "MCPWrappedTool",
 ]

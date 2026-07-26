@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional, Union, Literal
+from typing import Dict, Any, List, Optional, Union, Literal, Set
 
 try:
     from fastmcp import Client, FastMCP
@@ -41,6 +41,7 @@ class MCPClient(Client):
         self.transport_kwargs = transport_kwargs
         self.server_source = self._prepare_server_source(server_source)
         self.client: Optional[Client] = None
+        self._server_names: Set[str] = set()  # 存储服务器名称列表
  
     def _prepare_server_source(self, server_source: Union[str, List[str], FastMCP, Dict[str, Any]]):
         """
@@ -109,7 +110,20 @@ class MCPClient(Client):
         print("🔗 连接到 MCP 服务器...")
         self.client = Client(self.server_source)
         await self.client.__aenter__()
-        print("✅ 连接成功！")
+        try:
+            # 通过 initialize_result 获取服务器信息
+            init_result = self.client.initialize_result
+            if init_result is not None and init_result.serverInfo is not None:
+                server_name = init_result.serverInfo.name
+                server_title = getattr(init_result.serverInfo, 'title', '')
+                server_version = getattr(init_result.serverInfo, 'version', '')
+                display = server_title or server_name
+                print(f"✅ 连接到服务器: {display}")
+                self._server_names.add(server_name)
+            else:
+                print("✅ 连接成功！（服务器未返回名称信息）")
+        except Exception as e:
+            print(f"⚠️ 连接成功，但无法获取服务器信息: {e}")
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -251,24 +265,6 @@ class MCPClient(Client):
         except Exception:
             return False
 
-
-if __name__ == "__main__":
-    import asyncio
-
-    async def main():
-        # 示例：使用 github 上的 MCP 服务器脚本进行测试
-        server_source = "https://api.githubcopilot.com/mcp/"
-        async with MCPClient(server_source=server_source, headers={"Authorization": "Bearer your_token"}) as client:
-            tools = await client.list_tools()
-            print("可用工具:", tools)
-
-            resources = await client.list_resources()
-            print("可用资源:", resources)
-
-            prompts = await client.list_prompts()
-            print("可用提示词模板:", prompts)
-
-            is_alive = await client.ping()
-            print("服务器连接状态:", "在线" if is_alive else "离线")
-
-    asyncio.run(main())
+    def get_server_names(self) -> Set[str]:
+        """获取已连接的服务器名称列表副本"""
+        return self._server_names.copy()

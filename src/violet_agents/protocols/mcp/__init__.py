@@ -4,5 +4,7 @@
 """
 
 from .client import FASTMCP_AVAILABLE
-
-__all__ = ["FASTMCP_AVAILABLE"]
+from .client import MCPClient
+__all__ = [
+    "FASTMCP_AVAILABLE", 
+    "MCPClient"]

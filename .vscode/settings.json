@@ -3,5 +3,7 @@
         "enableInlineDocumentation": false,
         "enableInlineExplain": false
     },
-    "editor.suggest.snippetsPreventQuickSuggestions": false
+    "editor.suggest.snippetsPreventQuickSuggestions": false,
+    "trae.tab.enableRename": false,
+    "trae.tab.enableAutoImport": false
 }

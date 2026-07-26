@@ -10,10 +10,12 @@ from ..tools.builtin.weather_tool import WeatherTool
 from ..tools.builtin.terminal_tool import TerminalTool
 from ..tools.builtin.skills_tool import SkillsTool
 from ..tools.builtin.search_tools_tool import SearchToolsTool
+from ..tools.builtin.mcp_tool import MCPTool
 from ..tools import ConsoleConfirmInterceptor
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageFunctionToolCall
 from collections import deque
 import json
+import os
 
 REACT_PROMPT = """你是一个有能力使用工具的 AI 助手。
 遇到需要计算、查询或获取信息的问题时，请主动调用相关工具来获取准确结果。
@@ -238,7 +240,49 @@ if __name__ == "__main__":
     agent.create_session("user-123")
     agent.register_session_hook("PostToolCall", lambda msg: print(f"工具调用后返回了: {msg.content}"), session_id="user-123")
     agent.register_session_hook("PreToolCall", lambda tool_call: print(f"即将调用工具: {tool_call.function.name}\n"), session_id="user-123")
-    response = agent.run("你好，北京天气怎么样？上海天气怎么样？东京天气怎么样？南京天气怎么样？", session_id="user-123")
+    # ============================================================
+    # fastmcp 多服务器配置 (MCPConfig)
+    # 参考: https://gofastmcp.com/python-sdk/fastmcp-mcp_config
+    #
+    # Client(config) 自动为每个 server 的工具/资源添加命名空间:
+    #   {server_name}_{tool_name}
+    #   {server_name}+{resource_uri}
+    # ============================================================
+    config = {
+        "mcpServers": {
+            # --- HTTP/Streamable HTTP 远程服务器 ---
+            "github": {
+                "url": "https://api.githubcopilot.com/mcp/",
+                "transport": "http",               # "http" | "streamable-http" | "sse"
+                "headers": {                      # 自定义 HTTP 请求头
+                    "Authorization": f"Bearer {os.getenv('GITHUB_COPILOT_TOKEN')}",
+                },
+                # "auth": "oauth",                  # 认证方式: str (Bearer token) | "oauth" | httpx.Auth
+                "timeout": 30000,                   # 超时时间 (毫秒)
+            },
+            # --- Stdio 本地进程服务器（示例） ---
+            # "fetch": {
+            #     "command": "uvx",                 # 必填: npx | uvx | python | node | ...
+            #     "args": ["mcp-server-fetch"],     # 命令行参数
+            #     # "env": {"API_KEY": "xxx"},      # 环境变量
+            #     # "cwd": "/path/to/workdir",      # 工作目录
+            #     "transport": "stdio",             # 默认 stdio，可省略
+            #     "timeout": 30000,                 # 超时时间 (毫秒)
+            #     "description": "网页抓取 MCP 服务器",
+            # },
+            # --- 从 Python 脚本启动 ---
+            # "my-tools": {
+            #     "command": "python",
+            #     "args": ["-m", "my_mcp_server"],
+            #     "transport": "stdio",
+            #     "description": "自定义 MCP 工具集",
+            # },
+        }
+    }
+    mcp_tool = MCPTool(server_source=config, auto_expand=True)
+    tool_registry.register_tool(mcp_tool, is_defer=True)
+    tool_registry.register_dynamic_tools(mcp_tool.get_expanded_tools(), is_defer=True)
+    response = agent.run("你好，我的github仓库有什么？", session_id="user-123")
     print(response.content)
     response = agent.run("帮我看下这些域名的IP地址：baidu.com, github.com, deepseek.com", session_id="user-123")
     print(response.content)
