@@ -225,7 +225,10 @@ if __name__ == "__main__":
     tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[],
                                                      max_attempts=5,
                                                      auto_approve_if_no_rules=True))
-    tool_registry.register_tools(WeatherTool(), SkillsTool(), SearchToolsTool(get_deferTools_callback=tool_registry.get_defer_tools, search_strategy="subAgent"), is_defer=False)
+    tool_registry.register_tools(WeatherTool(), 
+                                 SkillsTool(), 
+                                 SearchToolsTool(get_deferTools_callback=tool_registry.get_defer_tools, search_strategy="subAgent"), 
+                                 is_defer=False)
     tool_registry.register_tool(TerminalTool(), is_defer=True)
     agent = ReactAgent(
         name="MyAgent",
@@ -260,6 +263,13 @@ if __name__ == "__main__":
                 # "auth": "oauth",                  # 认证方式: str (Bearer token) | "oauth" | httpx.Auth
                 "timeout": 30000,                   # 超时时间 (毫秒)
             },
+            "tavily": {
+                "url": "https://mcp.tavily.com/mcp",
+                "transport": "http",
+                "headers": {
+                    "Authorization": f"Bearer {os.getenv('TAVILY_MCP_TOKEN')}",
+                },
+            },
             # --- Stdio 本地进程服务器（示例） ---
             # "fetch": {
             #     "command": "uvx",                 # 必填: npx | uvx | python | node | ...
@@ -279,10 +289,8 @@ if __name__ == "__main__":
             # },
         }
     }
-    mcp_tool = MCPTool(server_source=config, auto_expand=True)
-    tool_registry.register_tool(mcp_tool, is_defer=True)
-    tool_registry.register_dynamic_tools(mcp_tool.get_expanded_tools(), is_defer=True)
-    response = agent.run("你好，我的github仓库有什么？", session_id="user-123")
+    MCPTool(server_source=config, auto_expand=True).register_to(tool_registry)
+    response = agent.run("你好，我github的账户名称叫什么？我的github有什么仓库？https://www.bilibili.com/video/BV1BvgQ6iEn9?spm_id_from=333.1007.tianma.1-1-1.click这个网址简要介绍一下内容，并行执行这些操作。意思是同时执行三个mcp_tool提供的call_tool", session_id="user-123")
     print(response.content)
     response = agent.run("帮我看下这些域名的IP地址：baidu.com, github.com, deepseek.com", session_id="user-123")
     print(response.content)

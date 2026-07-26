@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .session import Session
     from ..tools.registry import ToolRegistry
+    from ..tools import Tool
 class Agent(ABC):
 
     """Agent基类
@@ -162,6 +163,32 @@ class Agent(ABC):
         func = functools.partial(self.run, input_text, session_id=session_id, **kwargs)
         return await loop.run_in_executor(None, lambda: ctx.run(func))
     
+
+    def register_tool(self, tool: "Tool", is_defer: bool = False) -> "Agent":
+        """注册工具到 该Agent。支持链式调用。
+
+        Args:
+            tool: 要注册的工具实例
+            is_defer: 是否注册为延迟工具。默认 False。
+        Returns:
+            self: 该Agent实例，支持链式调用。
+        """
+        self.tool_registry.register_tool(tool, is_defer=is_defer)
+        return self
+
+    def register_dynamic_tool(self, 
+                              tools_source: Dict[str, "Tool"],
+                              is_defer: bool = False) -> "Agent":
+        """注册动态工具到 该Agent。支持链式调用。
+        
+        Args:
+            tools_source: 包含工具实例的字典，键为工具名称，值为工具实例。
+            is_defer: 是否注册为延迟工具。默认 False。
+        Returns:
+            self: 该Agent实例，支持链式调用。
+        """
+        self.tool_registry.register_dynamic_tools(tools_source, is_defer=is_defer)
+        return self
     
     def execute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
         """

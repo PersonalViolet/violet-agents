@@ -130,7 +130,6 @@ class MCPClient(Client):
         """异步上下文管理器出口"""
         if self.client:
             await self.client.__aexit__(exc_type, exc_val, exc_tb)
-            self.client = None
         print("🔌 连接已断开")
 
     async def list_tools(self) -> List[Dict[str, Any]]:
@@ -267,4 +266,32 @@ class MCPClient(Client):
 
     def get_server_names(self) -> Set[str]:
         """获取已连接的服务器名称列表副本"""
+        # 如果server_source的type为Dict，则从字典里获取服务器名称
+        if isinstance(self.server_source, dict):
+            self._server_names = set(self.server_source.get("mcpServers", {}))
+            return self._server_names.copy()
+        # 如果客户端未连接，则尝试连接以获取服务器名称
+        if not self.client:
+            async def connect():
+                async with self:
+                    pass # 确保客户端已连接并获取服务器名称
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                # 已有运行的事件循环，在新线程中运行 connect
+                import concurrent.futures
+                def run_in_thread():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        return new_loop.run_until_complete(connect())
+                    finally:
+                        new_loop.close()
+
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(run_in_thread)
+                    future.result()  # 等待线程完成
+            except RuntimeError:
+                # 没有运行的事件循环
+                asyncio.run(connect())
         return self._server_names.copy()

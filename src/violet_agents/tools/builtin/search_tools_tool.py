@@ -60,7 +60,12 @@ class SearchToolsTool(Tool):
             name="search_tools",
             description="""搜索工具的工具。
             当Agent在对话中判断需要调用工具，但现有的tools列表中没有合适的工具时，可以调用这个工具来搜索相关工具；
-            当Agent需要获取某个工具的详细信息时，也可以调用这个工具来获取。
+            当Agent需要获取某个工具的详细信息如参数时，也可以调用这个工具来获取。
+            该工具使用流程如下：
+            1. Agent调用该工具，传入action参数为"search"，查询字符串作为参数
+            2. 工具根据查询字符串在当前的工具注册表中搜索相关工具，并返回相关工具的列表供Agent选择。
+            3. Agent选择一个工具后，调用该工具，传入action参数为"get"，工具名称作为参数
+            4. 工具返回该工具的完整信息（名称、描述、参数等），供Agent调用执行。
             """
         )
         self.get_deferTools_callback = get_deferTools_callback

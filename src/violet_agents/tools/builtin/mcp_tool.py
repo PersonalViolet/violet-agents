@@ -1,10 +1,13 @@
 from ..base import Tool, ToolParameters, ToolProperty
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional, Union, List, TYPE_CHECKING
 import os
 from fastmcp import FastMCP
 import asyncio
 from ...protocols import MCPClient
 from ...core.message import Message
+
+if TYPE_CHECKING:
+    from ..registry import ToolRegistry
 
 class MCPTool(Tool):
     """MCP (Model Context Protocol) 工具
@@ -20,7 +23,7 @@ class MCPTool(Tool):
                  env: Optional[Dict[str, str]] = None,
                  env_keys: Optional[List[str]] = None,
                  auto_expand: bool = False,
-                 tool_time_out: int = 30):
+                 tool_time_out: int = 60):
         """
         初始化 MCP 工具
 
@@ -63,9 +66,11 @@ class MCPTool(Tool):
         self.auto_expand = auto_expand
         self.tool_time_out = tool_time_out
         self.client = MCPClient(server_source=self.server_source, server_args=self.server_args, env=self.env)
+        self._expanded_tools_cache: Optional[Dict[str, Tool]] = None
 
         self._discover_tools()
 
+        self.description = description or self._generate_description()
 
 
         super().__init__(name=name, description=description)
@@ -107,7 +112,7 @@ class MCPTool(Tool):
         try:
 
             async def discover():
-                async with self.client as client:
+                async with MCPClient(server_source=self.server_source, server_args=self.server_args, env=self.env) as client:
                     tools = await client.list_tools()
                     return tools
 
@@ -139,7 +144,7 @@ class MCPTool(Tool):
         """
         生成工具描述
         """
-        servers = self.client.get_server_names()
+        servers = MCPClient(server_source=self.server_source, server_args=self.server_args, env=self.env).get_server_names()
         server_count = len(servers)
         server_list = ", ".join(sorted(servers))
 
@@ -156,14 +161,15 @@ class MCPTool(Tool):
                 f"已连接 {server_count} 个服务器: {server_list}",
                 f"",
                 f"可用工具 ({len(self._available_tools)} 个):",
+                f"如果你想获取工具信息，只有在尝试完其它获取工具的途径而无果时才使用该工具提供的list_tools操作。"
             ]
-            for tool in self._available_tools:
-                name = getattr(tool, 'name', str(tool))
-                desc = getattr(tool, 'description', '')
-                if desc:
-                    lines.append(f"  • {name}: {desc}")
-                else:
-                    lines.append(f"  • {name}")
+            # for tool in self._available_tools:
+            #     name = getattr(tool, 'name', str(tool))
+            #     desc = getattr(tool, 'description', '')
+            #     if desc:
+            #         lines.append(f"  • {name}: {desc}")
+            #     else:
+            #         lines.append(f"  • {name}")
             return "\n".join(lines)
         else:
             # 如果不自动展开工具列表，则在提示词中显示MCP服务器连接情况以及每个工具如何调用
@@ -191,19 +197,56 @@ class MCPTool(Tool):
 
     def get_expanded_tools(self) -> Dict[str, Tool]:
         """
-        获取 MCP 服务器提供的工具列表（获取到的是引用，不是复制）
+        获取 MCP 服务器提供的工具列表。
+
+        首次调用时构建并缓存，后续调用返回同一字典引用。
+        这确保 register_dynamic_tools 持有的引用始终是最新的。
         """
         if not self.auto_expand:
             return {}
+        if self._expanded_tools_cache is not None:
+            return self._expanded_tools_cache
         from .mcp_wrapped_tool import MCPWrappedTool
-        expanded_tools = {}
+        self._expanded_tools_cache = {}
         for tool_info in self._available_tools:
             wrapped_tool = MCPWrappedTool(
                 mcp_tool=self,
                 tool_info=tool_info
             )
-            expanded_tools[wrapped_tool.name] = wrapped_tool
-        return expanded_tools
+            self._expanded_tools_cache[wrapped_tool.name] = wrapped_tool
+        return self._expanded_tools_cache
+
+    def register_to(
+        self,
+        registry: "ToolRegistry",
+        self_defer: bool = False,
+        expanded_defer: bool = True,
+    ) -> "MCPTool":
+        """
+        将 MCPTool 及其展开的子工具注册到指定的 ToolRegistry。
+
+        Args:
+            registry: 目标工具注册表。
+            self_defer: MCPTool 自身是否注册到延迟工具区。默认 False（直接暴露给 LLM，）。
+            expanded_defer: 展开的子工具是否注册到延迟工具区。默认 True（不直接暴露给 LLM）。
+
+        Returns:
+            self，支持链式调用。
+
+        Example:
+            >>> config = {"github": {"command": "npx", "args": [...]}}
+            >>> # MCPTool 自身直接暴露给 LLM，展开的子工具放到延迟工具区
+            >>> MCPTool(server_source=config, auto_expand=True).register_to(registry)
+            >>>
+            >>> # 全部放延迟区
+            >>> MCPTool(server_source=config, auto_expand=True).register_to(
+            ...     registry, self_defer=True, expanded_defer=True)
+        """
+        registry.register_tool(self, is_defer=self_defer)
+        expanded = self.get_expanded_tools()
+        if expanded:
+            registry.register_dynamic_tools(expanded, is_defer=expanded_defer)
+        return self
 
     def run(self, parameters: Dict[str, Any], tool_call_id: str) -> Message:
         action = parameters.get("action", "")
@@ -217,7 +260,7 @@ class MCPTool(Tool):
         try:
             import asyncio
             async def run_mcp_operation():
-                async with self.client as client:
+                async with MCPClient(server_source=self.server_source, server_args=self.server_args, env=self.env) as client:
                     if action == "list_tools":
                         tools = await client.list_tools()
                         if not tools:
@@ -293,7 +336,6 @@ class MCPTool(Tool):
                     loop = asyncio.get_running_loop()
                     # 如果有运行中的循环，在新线程中运行新的事件循环
                     import concurrent.futures
-                    import threading
 
                     def run_in_thread():
                         # 在新线程中创建新的事件循环
@@ -309,9 +351,13 @@ class MCPTool(Tool):
                         return future.result()
                 except RuntimeError:
                     # 没有运行中的循环，直接运行
-                    return asyncio.run(run_mcp_operation())
+                    try:
+                        return asyncio.run(run_mcp_operation())
+                    except asyncio.CancelledError:
+                        return Message(role="tool", content="❌ 操作被取消，可能因为超时或断开连接", tool_call_id=tool_call_id)
             except Exception as e:
-                return f"异步操作失败: {str(e)}"
+                msg = f"异步操作失败: {str(e)}"
+                return Message(role="tool", content=msg, tool_call_id=tool_call_id)
         except Exception as e:
             return Message(role="tool", content=f"❌ 运行时错误: {e}", tool_call_id=tool_call_id)
     
