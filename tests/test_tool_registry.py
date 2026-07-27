@@ -707,18 +707,25 @@ class TestAExecuteTools:
         asyncio.run(_run())
 
     def test_aexecute_tools_error_in_one(self):
-        """一个工具失败时，asyncio.gather 会传播异常。"""
+        """一个工具失败时，不抛异常，而是返回包含错误信息的 Message。"""
         async def _run():
             registry = ToolRegistry()
             registry.register_tool(EchoTool())
 
             tcs = [
                 make_dict_tool_call("echo", {"message": "ok"}, tool_call_id="call_ok"),
-                make_dict_tool_call("ghost", {}),  # 会失败
+                make_dict_tool_call("ghost", {}, tool_call_id="call_ghost"),  # 会失败
             ]
 
-            with pytest.raises(ValueError, match="未注册"):
-                await registry.aexecute_tools(tcs)
+            results = await registry.aexecute_tools(tcs)
+            assert len(results) == 2
+            # 成功的工具仍然返回正确结果
+            assert "ok" in results[0].content
+            # 失败的工具返回错误 Message（不抛异常）
+            assert results[1].role == "tool"
+            assert results[1].tool_call_id == "call_ghost"
+            assert "未注册" in results[1].content
+            assert "ghost" in results[1].content
 
         asyncio.run(_run())
 

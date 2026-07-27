@@ -23,7 +23,7 @@
 import os
 from typing import Literal, Optional, Iterator, Dict, Any, List, Union
 from collections import deque
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from .exceptions import VioletAgentException
 from openai.types.chat import ChatCompletion
 from .message import Message
@@ -87,9 +87,17 @@ class VioletAgentsLLM:
                 raise VioletAgentException("未找到模型名称，请检查环境变量配置或手动指定模型名称")
         
         self.client = self._create_client()
+        self.async_client = self._create_async_client()
 
     def _create_client(self) -> OpenAI:
         return OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.timeout,
+        )
+
+    def _create_async_client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
             timeout=self.timeout,
@@ -177,6 +185,37 @@ class VioletAgentsLLM:
             timeout=self.timeout,
             **kwargs
         )
-        
-        
+
+    async def achat(self,
+                    messages: Union[list[dict[str, Any]], deque[Message]],
+                    tools: Optional[List[Dict[str, Any]]] = None,
+                    tool_choice: Optional[TOOL_CHOICE] = 'none',
+                    **kwargs) -> ChatCompletion:
+        """
+        异步调用LLM服务进行对话，返回完整响应
+
+        Args:
+            messages: 类型支持list[dict[str, Any]]或deque[Message]，对话消息列表，每个消息包含role和content字段
+            tools: 工具列表，每个工具包含name和description字段
+            tool_choice: 工具选择策略
+
+        Returns:
+            LLM服务返回的响应
+        """
+
+        if isinstance(messages, deque):
+            messages = list(messages)
+        if messages and isinstance(messages[0], Message):
+            messages = [message.to_openai_dict() for message in messages]
+
+        return await self.async_client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            timeout=self.timeout,
+            **kwargs
+        )
     

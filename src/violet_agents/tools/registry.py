@@ -195,30 +195,29 @@ class ToolRegistry:
         all_tools.update(self._defer_tools)
         return all_tools
 
-    def execute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
+
+    def _parse_and_validate_tool_call(
+        self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]
+    ) -> tuple[Tool, Dict[str, Any], str]:
         """
-        执行_tools, _defer_tools中注册的工具
+        解析并验证工具调用信息，返回 (tool, parameters, tool_call_id)。
 
-        Args:
-            tool_call (Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]): 工具调用信息，llm返回的工具调用格式，包含工具名称、参数等信息
-
-        Returns:
-            Message: 工具执行结果封装的Message对象
+        供 execute_tool / aexecute_tool 共用，消除重复代码。
         """
         if isinstance(tool_call, ChatCompletionMessageFunctionToolCall):
             tool_call = tool_call.model_dump()
 
         if tool_call.get("type") != "function":
             raise ValueError("工具调用类型目前仅支持 'function'")
-        
+
         tool_call_id = tool_call.get("id", "")
         if not tool_call_id:
             raise ValueError("工具调用信息缺少 'id' 字段，无法唯一标识工具调用")
-        
+
         function = tool_call.get("function", {})
         if not function:
             raise ValueError("工具调用信息缺少 'function' 字段")
-        
+
         tool_name = function.get("name")
         arguments = function.get("arguments", "{}")
         try:
@@ -229,14 +228,28 @@ class ToolRegistry:
         tool = self._resolve_tool(tool_name)
         if tool is None:
             raise ValueError(f"工具 {tool_name} 未注册")
-        
+
         if not tool.validate_parameters(parameters):
             raise ValueError(f"工具 {tool_name} 参数验证失败，缺少必要参数")
-        
+
+        return tool, parameters, tool_call_id
+
+    def execute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
+        """
+        执行_tools, _defer_tools中注册的工具
+
+        Args:
+            tool_call (Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]): 工具调用信息，llm返回的工具调用格式，包含工具名称、参数等信息
+
+        Returns:
+            Message: 工具执行结果封装的Message对象
+        """
+        tool, parameters, tool_call_id = self._parse_and_validate_tool_call(tool_call)
+
         if self.interceptor:
             approved = self.interceptor.intercept(tool, parameters, tool_call_id)
             if not approved:
-                return Message(role="tool", content=f"❌ 工具调用未通过用户的审批，已被用户拒绝: {tool_name}", tool_call_id=tool_call_id)
+                return Message(role="tool", content=f"❌ 工具调用未通过用户的审批，已被用户拒绝: {tool.name}", tool_call_id=tool_call_id)
 
         return tool.run(parameters, tool_call_id)
 
@@ -302,26 +315,53 @@ class ToolRegistry:
         return results  # type: ignore[return-value]
 
     async def aexecute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
-        loop = asyncio.get_running_loop()
-        def execute():
-            return self.execute_tool(tool_call=tool_call)
-        ctx = contextvars.copy_context()
-        result = await loop.run_in_executor(self.executor, ctx.run, execute)
-        return result
-    
+        """
+        异步执行工具，使用异步拦截器（aintercept）和工具的异步执行方法（arun）。
+
+        Args:
+            tool_call (Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]): 工具调用信息
+
+        Returns:
+            Message: 工具执行结果封装的Message对象
+        """
+        tool, parameters, tool_call_id = self._parse_and_validate_tool_call(tool_call)
+
+        if self.interceptor:
+            approved = await self.interceptor.aintercept(tool, parameters, tool_call_id)
+            if not approved:
+                return Message(role="tool", content=f"❌ 工具调用未通过用户的审批，已被用户拒绝: {tool.name}", tool_call_id=tool_call_id)
+
+        return await tool.arun(parameters, tool_call_id)
+
     async def aexecute_tools(self, tool_calls: List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]) -> List[Message]:
         """
-        批量异步执行工具调用
+        批量异步并发执行工具调用，结果顺序与输入顺序一致。
+        单个工具失败不会影响其他工具的执行，失败的工具会返回包含错误信息的 Message。
 
         Args:
             tool_calls (List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]): 工具调用信息列表
 
         Returns:
-            List[Message]: 工具执行结果封装的Message对象列表
+            List[Message]: 工具执行结果封装的Message对象列表，与输入顺序一一对应
         """
+        if not tool_calls:
+            return []
+
         tasks = [self.aexecute_tool(tool_call) for tool_call in tool_calls]
-        results = await asyncio.gather(*tasks)
-        return results
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        safe_results: List[Message] = []
+        for tool_call, result in zip(tool_calls, results):
+            if isinstance(result, Exception):
+                tc = tool_call if isinstance(tool_call, dict) else tool_call.model_dump()
+                tool_call_id = tc.get("id", "")
+                safe_results.append(
+                    Message(role="tool", content=f"❌ 工具执行失败 ({type(result).__name__}): {result}", tool_call_id=tool_call_id)
+                )
+            else:
+                safe_results.append(result)
+
+        return safe_results
         
 
     def get_openai_tools(self, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:

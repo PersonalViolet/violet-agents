@@ -60,11 +60,16 @@ class Tool(ABC):
         """返回工具的默认状态快照。有状态工具子类需重写此方法。"""
         return {}
     
-    @abstractmethod
     def run(self, parameters: Dict[str, Any], tool_call_id: str) -> Message:
         """运行工具，处理输入参数并返回封装好的Message对象"""
-        pass
+        raise NotImplementedError("子类需要实现 run() 方法")
 
+    async def arun(self, parameters: Dict[str, Any], tool_call_id: str) -> Message:
+        """异步运行工具，处理输入参数并返回封装好的Message对象
+        
+        默认实现为同步调用run()，有异步需求的工具子类可重写此方法。"""
+        return self.run(parameters, tool_call_id)
+    
     @abstractmethod
     def get_parameters(self) -> ToolParameters:
         """定义工具的输入参数结构，返回ToolParameters对象"""

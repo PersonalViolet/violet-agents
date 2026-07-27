@@ -105,6 +105,51 @@ class ReactAgent(Agent):
         sess.agent_state["current_round"] += 1
         return response_message
 
+    # --- 主运行循环 ---
+    async def ado_run(self, 
+               input_text: str, 
+               session: "Session", 
+               **kwargs) -> Message:
+        sess = session
+        sess.agent_state.setdefault("current_round", 0)
+        self._trigger_session_hooks("UserPromptSubmit", input_text, sess=sess)
+
+        user_message = Message(content=input_text, role="user")
+        sys_message = Message(content=self.system_prompt, role="system") if self.system_prompt else None
+
+        messages = list(sess.get_history())  # 转为 list，后续追加
+        if sys_message:
+            messages.append(sys_message)
+        messages.append(user_message)
+
+        current_step = 0
+        while current_step < self.max_steps:
+            tools = self.tool_registry.get_openai_tools() + sess.agent_state.get("temp_tools", [])
+            response = await self.llm.achat(messages=messages, tools=tools, tool_choice="auto")
+            message = response.choices[0].message
+            tool_calls = message.tool_calls
+
+            if not tool_calls:
+                response_message = Message.from_chat_completion_message(message)
+                messages.append(response_message)
+                sess._history = deque(messages, maxlen=sess.max_history_length if sess.max_history_length > 0 else None)
+                sess._touch()
+                return response_message
+
+            llm_message = Message.from_chat_completion_message(message)
+            messages.append(llm_message)
+            tool_response_messages = await self.aexecute_tools(tool_calls)
+            messages.extend(tool_response_messages)
+            current_step += 1
+
+        response_text = "超出最大思考步骤限制，无法给出回答。"
+        response_message = Message(content=response_text, role="assistant")
+        messages.append(response_message)
+        sess._history = deque(messages, maxlen=sess.max_history_length if sess.max_history_length > 0 else None)
+        sess._touch()
+        # 更新agent_state中的current_round
+        sess.agent_state["current_round"] += 1
+        return response_message
 
     def execute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
         if self.tool_registry is None:
@@ -115,6 +160,16 @@ class ReactAgent(Agent):
         self._trigger_session_hooks("PostToolCall", tool_response_message, sess=sess)
         return tool_response_message
 
+    async def aexecute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
+        """异步执行工具调用。
+        """
+        if self.tool_registry is None:
+            raise RuntimeError("ToolRegistry is not initialized.")
+        sess = self._get_active_session()
+        self._trigger_session_hooks("PreToolCall", tool_call, sess=sess)
+        tool_response_message = await self.tool_registry.aexecute_tool(tool_call)
+        self._trigger_session_hooks("PostToolCall", tool_response_message, sess=sess)
+        return tool_response_message
     # --- 临时工具管理（操作 Session 中的字段） ---
 
     def _add_temp_tool(self, tool_schema_dict: Dict[str, Any], sess: Optional[Session] = None) -> None:
@@ -222,14 +277,14 @@ class ReactAgent(Agent):
 
 if __name__ == "__main__":
 
-    tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[],
+    tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[TerminalTool],
                                                      max_attempts=5,
                                                      auto_approve_if_no_rules=True))
     tool_registry.register_tools(WeatherTool(), 
                                  SkillsTool(), 
                                  SearchToolsTool(get_deferTools_callback=tool_registry.get_defer_tools, search_strategy="subAgent"), 
                                  is_defer=False)
-    tool_registry.register_tool(TerminalTool(), is_defer=True)
+    tool_registry.register_tool(TerminalTool(), is_defer=False)
     agent = ReactAgent(
         name="MyAgent",
         llm=VioletAgentsLLM(provider="deepseek"),
@@ -243,14 +298,6 @@ if __name__ == "__main__":
     agent.create_session("user-123")
     agent.register_session_hook("PostToolCall", lambda msg: print(f"工具调用后返回了: {msg.content}"), session_id="user-123")
     agent.register_session_hook("PreToolCall", lambda tool_call: print(f"即将调用工具: {tool_call.function.name}\n"), session_id="user-123")
-    # ============================================================
-    # fastmcp 多服务器配置 (MCPConfig)
-    # 参考: https://gofastmcp.com/python-sdk/fastmcp-mcp_config
-    #
-    # Client(config) 自动为每个 server 的工具/资源添加命名空间:
-    #   {server_name}_{tool_name}
-    #   {server_name}+{resource_uri}
-    # ============================================================
     config = {
         "mcpServers": {
             # --- HTTP/Streamable HTTP 远程服务器 ---
@@ -289,7 +336,16 @@ if __name__ == "__main__":
             # },
         }
     }
-    MCPTool(server_source=config, auto_expand=True).register_to(tool_registry)
+    MCPTool(server_source=config, auto_expand=False).register_to(tool_registry)
+    print("异步运行开始")
+    async def run_agent_tasks():
+        response = await agent.arun("你好，我github的账户名称叫什么（使用github mcp服务查询）？看看当前项目文件夹有什么？并行执行这些操作", session_id="user-123")
+        print(response.content)
+        response = await agent.arun("帮我看下这些域名的IP地址：baidu.com, github.com, deepseek.com", session_id="user-123")
+        print(response.content)
+    import asyncio
+    asyncio.run(run_agent_tasks())
+    print("异步运行结束")
     response = agent.run("你好，我github的账户名称叫什么？我的github有什么仓库？https://www.bilibili.com/video/BV1BvgQ6iEn9?spm_id_from=333.1007.tianma.1-1-1.click这个网址简要介绍一下内容，并行执行这些操作。意思是同时执行三个mcp_tool提供的call_tool", session_id="user-123")
     print(response.content)
     response = agent.run("帮我看下这些域名的IP地址：baidu.com, github.com, deepseek.com", session_id="user-123")

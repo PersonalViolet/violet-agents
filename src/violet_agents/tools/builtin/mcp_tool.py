@@ -28,7 +28,7 @@ class MCPTool(Tool):
         初始化 MCP 工具
 
         Args:
-            name: 工具名称（默认为"mcp"，建议为不同服务器指定不同名称）
+            name: 工具名称（默认为"mcp_tool"）
             description: 工具描述（可选，默认为通用描述）
             server_source: 服务器源，支持多种格式：
                 - FastMCP 实例: 内存传输（用于测试）
@@ -40,6 +40,7 @@ class MCPTool(Tool):
             env: 环境变量字典（优先级最高，直接传递给MCP服务器）
             env_keys: 要从系统环境变量加载的key列表（优先级中等）
             tool_time_out: 工具调用超时时间（秒）
+            auto_expand: 是否自动展开工具（默认False）
 
         环境变量优先级（从高到低）：
             1. 直接传递的env参数
@@ -360,7 +361,91 @@ class MCPTool(Tool):
                 return Message(role="tool", content=msg, tool_call_id=tool_call_id)
         except Exception as e:
             return Message(role="tool", content=f"❌ 运行时错误: {e}", tool_call_id=tool_call_id)
-    
+
+    async def arun(self, parameters: Dict[str, Any], tool_call_id: str) -> Message:
+        action = parameters.get("action", "")
+        if not action and "tool_name" in parameters:
+            action = "call_tool"
+            parameters["action"] = action
+
+        if not action:
+            return Message(role="tool", content="❌ 未提供操作类型 (action)", tool_call_id=tool_call_id)
+        try:
+            async with MCPClient(server_source=self.server_source, server_args=self.server_args, env=self.env) as client:
+                if action == "list_tools":
+                    tools = await client.list_tools()
+                    if not tools:
+                        return Message(role="tool", content="❌ 未发现可用工具", tool_call_id=tool_call_id)
+                    import json
+                    tool_schemas = []
+                    for tool in tools:
+                        name = tool.get('name', 'Unknown')
+                        desc = tool.get('description', '')
+                        input_schema = tool.get('input_schema', {})
+                        properties = input_schema.get('properties', {})
+                        required = input_schema.get('required', [])
+                        tool_schemas.append({
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "description": desc,
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": properties,
+                                    "required": required,
+                                }
+                            }
+                        })
+                    result = f"找到 {len(tools)} 个工具 (OpenAI function calling 格式):\n"
+                    result += json.dumps(tool_schemas, ensure_ascii=False, indent=2)
+                    return Message(role="tool", content=result, tool_call_id=tool_call_id)
+                elif action == "call_tool":
+                    tool_name = parameters.get("tool_name")
+                    arguments = parameters.get("arguments", {})
+                    if not tool_name:
+                        return Message(role="tool", content="❌ 未提供工具名称 (tool_name)", tool_call_id=tool_call_id)
+                    result = await client.call_tool(tool_name, arguments, timeout=self.tool_time_out)
+                    return Message(role="tool", content=result, tool_call_id=tool_call_id)
+                elif action == "list_resources":
+                    resources = await client.list_resources()
+                    if not resources:
+                        return Message(role="tool", content="❌ 未发现可用资源", tool_call_id=tool_call_id)
+                    result = f"找到{len(resources)} 个资源:\n"
+                    for resource in resources:
+                        result += f"- {resource.get('uri', 'Unknown')}: {resource.get('name', '')}\n"
+                    return Message(role="tool", content=result, tool_call_id=tool_call_id)
+                elif action == "read_resource":
+                    uri = parameters.get("uri")
+                    if not uri:
+                        return Message(role="tool", content="❌ 未提供资源 URI (uri)", tool_call_id=tool_call_id)
+                    resource_content = await client.read_resource(uri)
+                    return Message(role="tool", content=resource_content, tool_call_id=tool_call_id)
+                elif action == "list_prompts":
+                    prompts = await client.list_prompts()
+                    if not prompts:
+                        return Message(role="tool", content="❌ 未发现可用提示词", tool_call_id=tool_call_id)
+                    result = f"找到{len(prompts)} 个提示词:\n"
+                    for prompt in prompts:
+                        result += f"- {prompt.get('name', 'Unknown')}: {prompt.get('description', '')}\n"
+                    return Message(role="tool", content=result, tool_call_id=tool_call_id)
+                elif action == "get_prompt":
+                    prompt_name = parameters.get("prompt_name")
+                    prompt_arguments = parameters.get("prompt_arguments", {})
+                    if not prompt_name:
+                        return Message(role="tool", content="❌ 未提供提示词名称 (prompt_name)", tool_call_id=tool_call_id)
+                    messages = await client.get_prompt(prompt_name, prompt_arguments)
+                    result = f"提示词 '{prompt_name}':\n"
+                    for msg in messages:
+                        result += f"[{msg.get('role', 'unknown')}] {msg.get('content', '')}\n"
+                    return Message(role="tool", content=result, tool_call_id=tool_call_id)
+                else:
+                    return Message(role="tool", content=f"❌ 未知操作类型: {action}", tool_call_id=tool_call_id)
+        except asyncio.CancelledError:
+            return Message(role="tool", content="❌ 操作被取消，可能因为超时或断开连接", tool_call_id=tool_call_id)
+        except Exception as e:
+            return Message(role="tool", content=f"❌ MCP 操作失败: {e}", tool_call_id=tool_call_id)
+
+
     def get_parameters(self) -> ToolParameters:
         return ToolParameters(
             type="object",

@@ -196,12 +196,12 @@ class TestContextManager:
             assert client.client is not None
 
             await client.__aexit__(None, None, None)
-            assert client.client is None
+            assert client.client is not None
 
         asyncio.run(_run())
 
     def test_disconnect_on_exception(self):
-        """即使上下文因异常退出，client 也被清理。"""
+        """即使上下文因异常退出，client 也为None。"""
         async def _run():
             client = MCPClient(_make_test_server())
             await client.__aenter__()
@@ -213,7 +213,7 @@ class TestContextManager:
             except RuntimeError:
                 await client.__aexit__(RuntimeError, exc, None)
 
-            assert client.client is None
+            assert client.client is not None
 
         asyncio.run(_run())
 

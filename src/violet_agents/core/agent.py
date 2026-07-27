@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .session import Session
     from ..tools.registry import ToolRegistry
     from ..tools import Tool
+#  如果有状态的工具如果在多线程、同一Session下并发多次执行，可能会发生后写者覆盖前写者的状态问题。
 class Agent(ABC):
 
     """Agent基类
@@ -39,6 +40,7 @@ class Agent(ABC):
     线程安全说明：
     使用 contextvars 实现每个执行上下文（线程/asyncio task）独立的 active session 和历史记录，
     多线程并发调用 agent.run() 互不干扰。Session 池 (_sessions) 通过 RLock 保护并发读写。
+    如果有状态的工具如果在多线程、同一Session下并发多次执行，可能会发生后写者覆盖前写者的状态问题。
     """
 
     def __init__(self,
@@ -118,52 +120,90 @@ class Agent(ABC):
     def run(self, input_text: str, session_id: Optional[str] = None, **kwargs) -> Message:
         """运行Agent，处理输入并返回任务完成后的结果。
 
-        该方法不会修改session相关属性，负责解析 session_id，切换到对应的 session，触发 TurnStart/TurnEnd 钩子，并调用 do_run 处理输入。实现类只需关注 do_run 的实现即可。
+        内部流程：解析 session → 切换 session → 触发 TurnStart 钩子
+        → 调用 do_run() 处理输入 → 触发 TurnEnd 钩子 → 返回结果。
 
-        该方法会修改的session属性如下：
-        - _tool_state: 访问工具状态以便在 do_run 中使用工具时能够正确保存/恢复状态。
-        - 其他属性（如消息历史）由 do_run 实现类根据需要修改。
-    
-            设计目标是提供一个清晰的运行流程和钩子触发机制，让实现类专注于输入处理和工具调用的核心逻辑
+        实现类只需关注 do_run 的实现即可。
+
         Args:
             input_text: 用户输入文本
             session_id: 可选，指定使用的 session ID。不存在则自动创建。
         """
+        sess = self._prepare_turn(input_text, session_id)
+        response = self.do_run(input_text, session=sess, **kwargs)
+        return self._finalize_turn(response, sess)
+
+
+    def do_run(self,
+               input_text: str,
+               session: "Session",
+               **kwargs) -> Message:
+        """同步执行 Agent 核心逻辑。 如果调用了arun()却未实现ado_run()，则逻辑会在线程池中执行该方法。
+
+        子类必须实现此方法，定义具体的 Agent 处理逻辑。
+
+        Args:
+            input_text: 用户输入文本
+            session: 由 run()/arun() 解析并切换后的 Session 对象。
+        """
+        raise NotImplementedError("do_run method must be implemented by subclasses.")
+
+
+    def _prepare_turn(self, input_text: str, session_id: Optional[str]) -> "Session":
+        """轮次前置处理：解析 session、切换、触发 TurnStart 钩子。
+
+        由 run() 和 arun() 共用，提取公共的 session 管理与钩子触发逻辑。
+        """
         sess = self._resolve_session(session_id)
         self.switch_session(sess.session_id)
         self._trigger_session_hooks("TurnStart", input_text, sess=sess)
-        response = self.do_run(input_text, session=sess, **kwargs)
+        return sess
+
+    def _finalize_turn(self, response: Message, sess: "Session") -> Message:
+        """轮次后置处理：触发 TurnEnd 钩子并返回结果。
+
+        由 run() 和 arun() 共用，提取公共的 session 管理与钩子触发逻辑。
+        """
         self._trigger_session_hooks("TurnEnd", response, sess=sess)
         return response
 
 
-    @abstractmethod
-    def do_run(self, 
-               input_text: str, 
-               session: "Session", 
-               **kwargs) -> Message:
-        """运行Agent，处理输入并返回任务完成后的结果。
-
-        Args:
-            input_text: 用户输入文本
-            session: run方法传入的 Session 对象，已由 run 方法解析获得并自动切换到该 session。实现类直接使用该参数即可。
-        """
-    
-
     async def arun(self, input_text: str, session_id: Optional[str] = None, **kwargs) -> Message:
         """异步运行Agent，处理输入并返回任务完成后的结果。
 
-        该方法会在后台线程中调用同步的 run 方法，适用于异步环境下的调用。
-        实现类无需重写该方法，只需实现 do_run 即可。
-        子类可以覆盖此方法实现更复杂的异步逻辑。
+        内部流程与 run() 一致（解析 session → 切换 → TurnStart → TurnEnd），
+        区别在于通过 ado_run() 执行核心逻辑。默认的 ado_run() 在线程池中
+        执行同步的 do_run()，避免阻塞事件循环。
 
+        实现类无需重写该方法，只需实现 do_run 即可。
+        子类可覆盖 ado_run() 实现更复杂的异步逻辑。
+
+        Args:
+            input_text: 用户输入文本
+            session_id: 可选，指定使用的 session ID。不存在则自动创建。
+        """
+        sess = self._prepare_turn(input_text, session_id)
+        response = await self.ado_run(input_text, session=sess, **kwargs)
+        return self._finalize_turn(response, sess)
+
+    async def ado_run(self,
+               input_text: str,
+               session: "Session",
+               **kwargs) -> Message:
+        """异步执行 Agent 核心逻辑。
+
+        默认实现在线程池中调用同步的 do_run()，避免阻塞事件循环。
+        子类可覆盖此方法实现原生异步逻辑。
+
+        Args:
+            input_text: 用户输入文本
+            session: 由 run()/arun() 解析并切换后的 Session 对象。
         """
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
-        func = functools.partial(self.run, input_text, session_id=session_id, **kwargs)
+        func = functools.partial(self.do_run, input_text, session=session, **kwargs)
         return await loop.run_in_executor(None, lambda: ctx.run(func))
     
-
     def register_tool(self, tool: "Tool", is_defer: bool = False) -> "Agent":
         """注册工具到 该Agent。支持链式调用。
 
@@ -205,6 +245,7 @@ class Agent(ABC):
         与 ToolRegistry.execute_tools_concurrently() 的关键区别：
         本方法通过 self.execute_tool() 执行每个工具调用，因此子类（如 ReactAgent）重写
         execute_tool() 后注入的 PreToolCall / PostToolCall 等钩子也会对并发路径生效。
+
         """
         if not tool_calls:
             return []
@@ -237,6 +278,44 @@ class Agent(ABC):
             )
 
         return results  # type: ignore[return-value]
+
+    async def aexecute_tool(self, tool_call: Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]) -> Message:
+        """异步执行工具调用。
+        """
+        if self.tool_registry is None:
+            raise RuntimeError("ToolRegistry is not initialized.")
+        return await self.tool_registry.aexecute_tool(tool_call)
+
+    async def aexecute_tools(self, tool_calls: List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]) -> List[Message]:
+        """
+        批量异步并发执行工具调用，结果顺序与输入顺序一致。
+        单个工具失败不会影响其他工具的执行，失败的工具会返回包含错误信息的 Message。
+
+        Args:
+            tool_calls (List[Union[Dict[str, Any], ChatCompletionMessageFunctionToolCall]]): 工具调用信息列表
+
+        Returns:
+            List[Message]: 工具执行结果封装的Message对象列表，与输入顺序一一对应
+        """
+        if not tool_calls:
+            return []
+
+        tasks = [self.aexecute_tool(tool_call) for tool_call in tool_calls]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        safe_results: List[Message] = []
+        for tool_call, result in zip(tool_calls, results):
+            if isinstance(result, Exception):
+                tc = tool_call if isinstance(tool_call, dict) else tool_call.model_dump()
+                tool_call_id = tc.get("id", "")
+                safe_results.append(
+                    Message(role="tool", content=f"❌ 工具执行失败 ({type(result).__name__}): {result}", tool_call_id=tool_call_id)
+                )
+            else:
+                safe_results.append(result)
+
+        return safe_results
+
     
     # --- 历史方法（委托模式） ---
     def add_message(self,

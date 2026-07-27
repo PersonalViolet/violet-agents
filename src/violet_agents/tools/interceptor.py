@@ -1,5 +1,6 @@
 """
 工具拦截器 —— 在工具调用前进行拦截/审批。
+同步版本用于 ToolRegistry.execute_tool，异步版本用于 ToolRegistry.aexecute_tool。
 """
 
 
@@ -10,7 +11,7 @@ from .base import Tool
 
 class ToolInterceptor(ABC):
     """工具拦截器基类 —— 在工具执行前进行拦截，决定是否放行。"""
-    
+
     def __init__(self,
                  whitelist: Optional[List[Type[Tool]]] = None,
                  intercept_list: Optional[List[Type[Tool]]] = None,
@@ -29,16 +30,11 @@ class ToolInterceptor(ABC):
         self.whitelist = whitelist or []
         self.intercept_list = intercept_list or []
         self.auto_approve_if_no_rules = auto_approve_if_no_rules
-        
+
     def intercept(self, tool: Tool, parameters: Dict[str, Any], tool_call_id: str) -> bool:
         """
-        根据拦截规则决定是否放行工具调用
-        Args:
-            tool (Tool): 被调用的工具实例
-            parameters (Dict[str, Any]): 工具参数
-            tool_call_id (str): 工具调用ID
-        Returns:
-            bool: 是否放行工具调用
+        同步拦截 —— 根据拦截规则决定是否放行工具调用。
+        由 ToolRegistry.execute_tool 调用，调用 do_intercept()。
         """
         if type(tool) in self.intercept_list:
             return self.do_intercept(tool, parameters, tool_call_id)
@@ -49,13 +45,29 @@ class ToolInterceptor(ABC):
         else:
             return True
 
+    async def aintercept(self, tool: Tool, parameters: Dict[str, Any], tool_call_id: str) -> bool:
+        """
+        异步拦截 —— 根据拦截规则决定是否放行工具调用。
+        由 ToolRegistry.aexecute_tool 调用，调用 ado_intercept()。
+        默认实现回退到同步版本，子类可覆写以提供真正的异步实现。
+        """
+        if type(tool) in self.intercept_list:
+            return await self.ado_intercept(tool, parameters, tool_call_id)
+        if type(tool) in self.whitelist:
+            return True
+        if self.auto_approve_if_no_rules == False:
+            return await self.ado_intercept(tool, parameters, tool_call_id)
+        else:
+            return True
+
     @abstractmethod
     def do_intercept(self, tool: Tool, parameters: Dict[str, Any], tool_call_id: str) -> bool:
-        """具体的拦截逻辑，由子类实现
-        
-        Args:
-            tool (Tool): 被调用的工具实例
-            parameters (Dict[str, Any]): 工具参数
-            tool_call_id (str): 工具调用ID
+        """具体的同步拦截逻辑，由子类实现。"""
+
+    async def ado_intercept(self, tool: Tool, parameters: Dict[str, Any], tool_call_id: str) -> bool:
         """
-        pass
+        具体的异步拦截逻辑。默认回退到同步版本 do_intercept()。
+        如果子类的 do_intercept 包含阻塞 I/O（如 input()），应覆写此方法
+        将阻塞操作放到线程池执行，避免阻塞事件循环。
+        """
+        return self.do_intercept(tool, parameters, tool_call_id)
