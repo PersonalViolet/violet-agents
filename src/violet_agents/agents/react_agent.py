@@ -255,26 +255,6 @@ class ReactAgent(Agent):
         def _trigger_session_hooks(self, event: Literal["PostToolCall"], arg: Message, sess: Optional["Session"] = None) -> None: ...
 
 
-
-# if __name__ == "__main__":
-#     load_dotenv(dotenv_path="D:/My-Project/violet_agents/.env")
-#     llm = VioletAgentsLLM(provider='deepseek')
-#     tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[TerminalTool],
-#                                                      max_attempts=5,
-#                                                      auto_approve_if_no_rules=True))
-#     weather_tool = WeatherTool()
-#     terminal_tool = TerminalTool()
-#     skills_tool = SkillsTool()
-#     search_tools_tool = SearchToolsTool(get_deferTools_callback=tool_registry.get_defer_tools, search_strategy="subAgent")
-#     tool_registry.register_tool(weather_tool)
-#     tool_registry.register_tool(terminal_tool, is_defer=True)
-#     tool_registry.register_tool(skills_tool)
-#     tool_registry.register_tool(search_tools_tool)
-#     system_msg = REACT_PROMPT + "\n\n" + skills_tool.get_system_prompt_section()
-#     agent = ReactAgent(name="ReactAgent", llm=llm, system_prompt=system_msg, tool_registry=tool_registry, max_steps=10)
-#     message = agent.run("你好啊，我想看看我目前连接的网络里还有哪些设备？使用search_tools工具")
-#     print(message.content)
-
 if __name__ == "__main__":
 
     tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[TerminalTool],

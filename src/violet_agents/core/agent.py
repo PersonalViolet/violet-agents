@@ -494,6 +494,14 @@ class Agent(ABC):
             state = sess.get_tool_state(tool_name)
             tool.restore_session_state(state)
 
+    # --- Session 对外接口 ---
+    def get_active_session_id(self) -> str:
+        """获取当前 active session 的 session_id。"""
+        active = self._get_active_session()
+        if active:
+            return active.session_id
+        return None
+
 
     # --- Session 解析辅助 ---
     def _resolve_session(self, session_id: Optional[str]) -> "Session":
@@ -519,7 +527,7 @@ class Agent(ABC):
         active = self._get_active_session()
         if active:
             return active
-        # 向后兼容：自动创建默认 session
+        # 自动创建默认 session
         default_sid = self._get_default_session_id()
         if default_sid is None:
             default_sid = self.create_session()

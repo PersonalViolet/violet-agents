@@ -30,6 +30,7 @@ class Session:
     """
 
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    session_title: str = field(default_factory=lambda: "")
     max_history_length: int = 100
 
     # --- 消息历史 ---
@@ -49,11 +50,6 @@ class Session:
     # --- 钩子 (hook_name -> list of callbacks) ---
     hooks: Dict[str, List[Callable]] = field(default_factory=dict)
 
-    # --- ReactAgent 专用字段 ---
-    # temp_tools: List[Dict[str, Any]] = field(default_factory=list)
-    # temp_tools_names: Set[str] = field(default_factory=set)
-    # temp_tools_last_call_round: Dict[str, int] = field(default_factory=dict)
-    # current_round: int = 0
 
     def __post_init__(self):
         """确保 _history 的 maxlen 正确，初始化 hooks 结构。"""
