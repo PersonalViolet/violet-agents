@@ -16,6 +16,9 @@ from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMe
 from collections import deque
 import json
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 REACT_PROMPT = """你是一个有能力使用工具的 AI 助手。
 遇到需要计算、查询或获取信息的问题时，请主动调用相关工具来获取准确结果。
@@ -213,7 +216,7 @@ class ReactAgent(Agent):
                 self._add_temp_tool(tool_schema_dict, sess=sess)
                 tool_response_message.content = f"已加载工具: {tool_schema_dict.get('function', {}).get('name', '未知工具')}"
             except json.JSONDecodeError as e:
-                print(f"工具schema解析失败，确保工具返回的schema是有效的JSON字符串: {e}")
+                logger.warning("工具schema解析失败，确保工具返回的schema是有效的JSON字符串: %s", e)
 
     def _on_temp_tool_called_hook(self, tool_call: ChatCompletionMessageFunctionToolCall) -> None:
         sess = self._get_active_session()
@@ -256,6 +259,7 @@ class ReactAgent(Agent):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     tool_registry = ToolRegistry(ConsoleConfirmInterceptor(intercept_list=[TerminalTool],
                                                      max_attempts=5,
@@ -272,12 +276,12 @@ if __name__ == "__main__":
         max_steps=10,
     )
 
-    agent.registry_agent_hook("SessionInit", lambda sess: print(f"Session '{sess.session_id}' 正在初始化"))
-    agent.registry_agent_hook("PreSessionSwitch", lambda sessions: print(f"正在切换 session，从 '{sessions[0].session_id if sessions[0] else None}' 切换到 '{sessions[1].session_id}'"))
+    agent.registry_agent_hook("SessionInit", lambda sess: logger.info("Session '%s' 正在初始化", sess.session_id))
+    agent.registry_agent_hook("PreSessionSwitch", lambda sessions: logger.info("正在切换 session，从 '%s' 切换到 '%s'", sessions[0].session_id if sessions[0] else None, sessions[1].session_id))
     # 方式一：指定 session_id 运行（自动创建 session）
     agent.create_session("user-123")
-    agent.register_session_hook("PostToolCall", lambda msg: print(f"工具调用后返回了: {msg.content}"), session_id="user-123")
-    agent.register_session_hook("PreToolCall", lambda tool_call: print(f"即将调用工具: {tool_call.function.name}\n"), session_id="user-123")
+    agent.register_session_hook("PostToolCall", lambda msg: logger.info("工具调用后返回了: %s", msg.content), session_id="user-123")
+    agent.register_session_hook("PreToolCall", lambda tool_call: logger.info("即将调用工具: %s\n", tool_call.function.name), session_id="user-123")
     config = {
         "mcpServers": {
             # --- HTTP/Streamable HTTP 远程服务器 ---
@@ -317,35 +321,35 @@ if __name__ == "__main__":
         }
     }
     MCPTool(server_source=config, auto_expand=False).register_to(tool_registry)
-    print("异步运行开始")
+    logger.info("异步运行开始")
     async def run_agent_tasks():
         response = await agent.arun("你好，我github的账户名称叫什么（使用github mcp服务查询）？看看当前项目文件夹有什么？并行执行这些操作", session_id="user-123")
-        print(response.content)
+        logger.info("Agent 回复: %s", response.content)
         response = await agent.arun("帮我看下这些域名的IP地址：baidu.com, github.com, deepseek.com", session_id="user-123")
-        print(response.content)
+        logger.info("Agent 回复: %s", response.content)
     import asyncio
     asyncio.run(run_agent_tasks())
-    print("异步运行结束")
+    logger.info("异步运行结束")
     response = agent.run("你好，我github的账户名称叫什么？我的github有什么仓库？https://www.bilibili.com/video/BV1BvgQ6iEn9?spm_id_from=333.1007.tianma.1-1-1.click这个网址简要介绍一下内容，并行执行这些操作。意思是同时执行三个mcp_tool提供的call_tool", session_id="user-123")
-    print(response.content)
+    logger.info("Agent 回复: %s", response.content)
     response = agent.run("帮我看下这些域名的IP地址：baidu.com, github.com, deepseek.com", session_id="user-123")
-    print(response.content)
+    logger.info("Agent 回复: %s", response.content)
     agent.deactivate_session()  # 显式结束 session，触发工具状态保存
 
     # 方式二：上下文管理器
     with agent.session("user-123"):
         response = agent.run("你肯定有terminal工具，想方设法找到它。简单看看我的ip地址，还有我刚刚询问天气的城市叫啥？")
-        print(response.content)
+        logger.info("Agent 回复: %s", response.content)
         response = agent.run("使用cd命令（不要用/d）进入我的src/violet_agents/agents包；看我的agents包里有什么文件？")
-        print(response.content)
+        logger.info("Agent 回复: %s", response.content)
 
     # 方式三：手动管理
     agent.create_session("user-456")
     agent.switch_session("user-456")
     response = agent.run("我刚刚说了什么？还有，我喜欢千小妹，简短回复我")
-    print(response.content)
+    logger.info("Agent 回复: %s", response.content)
     response = agent.run("terminal工具现在的工作目录在哪里？看一下并告诉我，使用cd命令检查一下，你一定有terminal工具的，你用search_tools工具找一下，如果找不到就直接调用看看，不要放弃！")
-    print(response.content)
+    logger.info("Agent 回复: %s", response.content)
     agent.switch_session("user-123")  # 切回之前的 session
     response = agent.run("我之前说了什么？现在的terminal工具工作目录在哪里？使用cd命令检查")
-    print(response.content)
+    logger.info("Agent 回复: %s", response.content)

@@ -1,9 +1,12 @@
 
 import asyncio
+import logging
 from typing import Dict, Any, Optional, List, Type
 from ..interceptor import ToolInterceptor
 from ..base import Tool
 from ..builtin import TerminalTool
+
+logger = logging.getLogger(__name__)
 
 
 class ConsoleConfirmInterceptor(ToolInterceptor):
@@ -42,9 +45,9 @@ class ConsoleConfirmInterceptor(ToolInterceptor):
             elif is_approved.lower() == "n":
                 return False
             else:
-                print(f"无效输入，请输入 'y' 或 'n'\n 剩余尝试次数: {max_attempts - 1}")
+                logger.warning("无效输入，请输入 'y' 或 'n'，剩余尝试次数: %s", max_attempts - 1)
                 max_attempts -= 1
-        print("超过最大尝试次数，默认拒绝该工具调用")
+        logger.warning("超过最大尝试次数，默认拒绝该工具调用")
         return False
 
     async def ado_intercept(self, tool: Tool, parameters: Dict[str, Any], tool_call_id: str) -> bool:

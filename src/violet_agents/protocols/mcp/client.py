@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, Any, List, Optional, Union, Literal, Set
 
 try:
@@ -8,6 +9,8 @@ except ImportError:
     FASTMCP_AVAILABLE = False
 
 SUPPORTED_TRANSPORTS = Literal["stdio", "http"]  # 支持的传输类型列表
+
+logger = logging.getLogger(__name__)
 
 class MCPClient(Client):
 
@@ -55,13 +58,13 @@ class MCPClient(Client):
         """
         # 1. FastMCP 实例（内存传输）
         if isinstance(server_source, FastMCP):
-            print("使用 FastMCP 实例（内存传输）进行通信。")
+            # print("使用 FastMCP 实例（内存传输）进行通信。")
             return server_source
         
         # 2. HTTP URL - HTTP 传输（SSE已不推荐）
         if isinstance(server_source, str) and (server_source.startswith("http://") or server_source.startswith("https://")):
             transport_type = "http"
-            print(f"使用 HTTP URL（{transport_type}）进行通信。")
+            logger.info("使用 HTTP URL（%s）进行通信。", transport_type)
             if transport_type == "sse":
                 raise ValueError("SSE 传输已不推荐，请使用 HTTP 传输。")
             elif transport_type == "http":
@@ -70,7 +73,7 @@ class MCPClient(Client):
         # 3. Python 脚本路径 - STDIO 传输
         if isinstance(server_source, str) and server_source.endswith(".py"):
             transport_type = "stdio"
-            print(f"使用 Python 脚本（{transport_type}）进行通信。")
+            logger.info("使用 Python 脚本（%s）进行通信。", transport_type)
             return PythonStdioTransport(script_path=server_source,
                                         args=self.server_args,
                                         env=self.env,
@@ -78,7 +81,7 @@ class MCPClient(Client):
 
         # 4. 命令列表 - STDIO 传输
         if isinstance(server_source, list) and len(server_source) > 0:
-            print(f"使用命令列表进行通信。传输类型：STDIO")
+            logger.info("使用命令列表进行通信。传输类型：STDIO")
             if server_source[0] == "python" and len(server_source) > 1 and server_source[1].endswith(".py"):
                 # Python 脚本
                 return PythonStdioTransport(
@@ -99,7 +102,7 @@ class MCPClient(Client):
 
         # 5. 配置字典 - 根据配置创建传输
         if isinstance(server_source, dict):
-            print("使用配置字典，请确保格式符合 fastmcp 文档要求。")
+            logger.info("使用配置字典，请确保格式符合 fastmcp 文档要求。")
             return server_source  # 假设字典已经是有效的传输配置
 
         raise ValueError("无法识别的服务器源类型。请提供 FastMCP 实例、HTTP URL、Python 脚本路径、命令列表或配置字典。")
@@ -107,7 +110,7 @@ class MCPClient(Client):
         
     async def __aenter__(self):
         """异步上下文管理器入口"""
-        print("🔗 连接到 MCP 服务器...")
+        logger.info("🔗 连接到 MCP 服务器...")
         self.client = Client(self.server_source)
         await self.client.__aenter__()
         try:
@@ -118,19 +121,21 @@ class MCPClient(Client):
                 server_title = getattr(init_result.serverInfo, 'title', '')
                 server_version = getattr(init_result.serverInfo, 'version', '')
                 display = server_title or server_name
-                print(f"✅ 连接到服务器: {display}")
+                logger.info("✅ 连接到服务器: %s", display)
                 self._server_names.add(server_name)
             else:
-                print("✅ 连接成功！（服务器未返回名称信息）")
+                pass
+                logger.info("✅ 连接成功！（服务器未返回名称信息）")
         except Exception as e:
-            print(f"⚠️ 连接成功，但无法获取服务器信息: {e}")
+            logger.warning("⚠️ 连接成功，但无法获取服务器信息: %s", e)
+            pass
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """异步上下文管理器出口"""
         if self.client:
             await self.client.__aexit__(exc_type, exc_val, exc_tb)
-        print("🔌 连接已断开")
+        logger.info("🔌 连接已断开")
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         """列出所有可用的工具"""

@@ -1,6 +1,7 @@
 from ..base import Tool, ToolParameters, ToolProperty
 from typing import Dict, Any, Optional, Union, List, TYPE_CHECKING
 import os
+import logging
 from fastmcp import FastMCP
 import asyncio
 from ...protocols import MCPClient
@@ -8,6 +9,8 @@ from ...core.message import Message
 
 if TYPE_CHECKING:
     from ..registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 class MCPTool(Tool):
     """MCP (Model Context Protocol) 工具
@@ -94,15 +97,15 @@ class MCPTool(Tool):
                 value = os.getenv(key)
                 if value:
                     result_env[key] = value
-                    print(f"从系统环境变量加载: {key}")
+                    logger.info("从系统环境变量加载: %s", key)
                 else:
-                    print(f"警告: 系统环境变量中未找到 {key}")
+                    logger.warning("系统环境变量中未找到 %s", key)
 
         # 2. 直接传递的env（优先级最高）
         if env:
             result_env.update(env)
             for key in env.keys():
-                print(f"直接传递环境变量: {key}")
+                logger.info("直接传递环境变量: %s", key)
 
         return result_env
 
@@ -137,7 +140,7 @@ class MCPTool(Tool):
                 self._available_tools = asyncio.run(discover())
             
         except Exception as e:
-            print(f"发现工具时出错: {e}")
+            logger.error("发现工具时出错: %s", e)
             return []
 
 

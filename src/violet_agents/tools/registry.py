@@ -9,6 +9,9 @@ from .interceptor import ToolInterceptor
 import concurrent.futures
 import asyncio
 import contextvars
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ToolRegistry:
     """
@@ -50,24 +53,24 @@ class ToolRegistry:
         """
         # 如果工具名已存在于目标字典中，打印覆盖提示
         if (is_defer and tool.name in self._defer_tools) or (not is_defer and tool.name in self._tools):
-            print(f"工具 {tool.name} 已经注册，覆盖原有工具")
+            logger.warning("工具 %s 已经注册，覆盖原有工具", tool.name)
         
         # 如果工具名存在于另一个字典中，则删除它（实现覆盖行为）
         if tool.name in self._tools and is_defer:
             # 如果要注册为 defer 工具，但该名称已在普通工具中存在，则删除普通工具
             del self._tools[tool.name]
-            print(f"工具 {tool.name} 从普通工具移动到延迟工具")
+            logger.info("工具 %s 从普通工具移动到延迟工具", tool.name)
         elif tool.name in self._defer_tools and not is_defer:
             # 如果要注册为普通工具，但该名称已在 defer 工具中存在，则删除 defer 工具
             del self._defer_tools[tool.name]
-            print(f"工具 {tool.name} 从延迟工具移动到普通工具")
+            logger.info("工具 %s 从延迟工具移动到普通工具", tool.name)
         
         if is_defer:
             self._defer_tools[tool.name] = tool
-            print(f"工具 {tool.name} 注册为延迟工具")
+            logger.info("工具 %s 注册为延迟工具", tool.name)
         else:
             self._tools[tool.name] = tool
-            print(f"工具 {tool.name} 注册为普通工具")
+            logger.info("工具 %s 注册为普通工具", tool.name)
 
     def register_tools(self, *tools: Tool, is_defer: bool = False) -> "ToolRegistry":
         """

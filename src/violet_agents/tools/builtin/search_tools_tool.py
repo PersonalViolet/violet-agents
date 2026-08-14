@@ -8,10 +8,13 @@ from ...core.agent import Agent, SubAgent
 from ...core.llm import VioletAgentsLLM
 from ...core.config import Config
 import json
+import logging
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ...core.session import Session
 SearchStrategy = Literal["keyword", "subAgent"]
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -120,10 +123,10 @@ class SearchToolsTool(Tool):
             if isinstance(output_tools, list):
                 return output_tools
             else:
-                print(f"子Agent返回的工具列表格式不正确，预期为列表但得到: {output_tools}")
+                logger.warning("子Agent返回的工具列表格式不正确，预期为列表但得到: %s", output_tools)
                 return []
         except Exception as e:
-            print(f"子Agent返回的工具列表解析失败，确保子Agent的输出是有效的JSON字符串: {e}")
+            logger.warning("子Agent返回的工具列表解析失败，确保子Agent的输出是有效的JSON字符串: %s", e)
             return []
             
 
@@ -170,7 +173,7 @@ class SearchToolsTool(Tool):
             return retrieved_docs
 
         except Exception as e:
-            print(f"向量化检索失败")
+            logger.exception("向量化检索失败")
             return []
 
     def get_parameters(self) -> ToolParameters:
