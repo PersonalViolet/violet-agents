@@ -39,8 +39,7 @@ class SearchToolsSubAgent(SubAgent):
         history.append(user_message)
         messages = history
         response = self.llm.chat(messages=messages)
-        response_text = response.choices[0].message.content
-        response_message = Message(content=response_text, role="assistant")
+        response_message = Message.from_chat_completion(response)
         return response_message
 
 

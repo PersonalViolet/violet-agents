@@ -85,14 +85,14 @@ class ReactAgent(Agent):
             tool_calls = message.tool_calls
 
             if not tool_calls:
-                response_message = Message.from_chat_completion_message(message)
+                response_message = Message.from_chat_completion(response)
                 messages.append(response_message)
                 # 修复 bug：用 deque 保持类型一致并应用 maxlen
                 sess._history = deque(messages, maxlen=sess.max_history_length if sess.max_history_length > 0 else None)
                 sess._touch()
                 return response_message
 
-            llm_message = Message.from_chat_completion_message(message)
+            llm_message = Message.from_chat_completion(response)
             messages.append(llm_message)
             # 使用并发执行，确保 PreToolCall / PostToolCall 钩子对每条 tool_call 都生效
             tool_response_messages = self.execute_tools_concurrently(tool_calls)
@@ -133,13 +133,13 @@ class ReactAgent(Agent):
             tool_calls = message.tool_calls
 
             if not tool_calls:
-                response_message = Message.from_chat_completion_message(message)
+                response_message = Message.from_chat_completion(response)
                 messages.append(response_message)
                 sess._history = deque(messages, maxlen=sess.max_history_length if sess.max_history_length > 0 else None)
                 sess._touch()
                 return response_message
 
-            llm_message = Message.from_chat_completion_message(message)
+            llm_message = Message.from_chat_completion(response)
             messages.append(llm_message)
             tool_response_messages = await self.aexecute_tools(tool_calls)
             messages.extend(tool_response_messages)

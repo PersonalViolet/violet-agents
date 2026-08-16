@@ -33,8 +33,7 @@ class SimpleAgent(Agent):
         messages = history
 
         response = self.llm.chat(messages=messages)
-        response_text = response.choices[0].message.content
-        response_message = Message(content=response_text, role="assistant")
+        response_message = Message.from_chat_completion(response)
 
         sess.add_message(user_message)
         sess.add_message(response_message)
@@ -49,7 +48,6 @@ class SimpleAgent(Agent):
 #     print(message.content)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     agent = SimpleAgent(
         name="MyAgent",
         llm=VioletAgentsLLM(provider="deepseek"),
@@ -58,12 +56,14 @@ if __name__ == "__main__":
 
     # 方式一：指定 session_id 运行（自动创建 session）
     response = agent.run("你好，达尼亚好可爱，简短回复我", session_id="user-123")
-    logger.info("Agent 回复: %s", response.content)
+    print("Agent 回复: %s", response.content)
+    print(f"token: {response.usage}")
 
     # 方式二：上下文管理器
     with agent.session("user-123"):
         response = agent.run("我刚刚说了什么？")
-    logger.info("Agent 回复: %s", response.content)
+    print("Agent 回复: %s", response.content)
+    print(f"token: {response.usage}")
 
     # 方式三：手动管理
     agent.create_session("user-456")
@@ -72,4 +72,5 @@ if __name__ == "__main__":
     logger.info("Agent 回复: %s", response.content)
     agent.switch_session("user-123")  # 切回之前的 session
     response = agent.run("我有说我喜欢千小妹吗？")
-    logger.info("Agent 回复: %s", response.content)
+    print("Agent 回复: %s", response.content)
+    print(f"token: {response.usage}")
